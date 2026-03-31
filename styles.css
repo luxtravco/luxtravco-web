@@ -517,6 +517,14 @@ main {
   font-weight: 600;
 }
 
+.pricing-card .fine-print {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(247, 245, 242, 0.65);
+  margin-top: -6px;
+}
+
 .pricing-card ul {
   list-style: none;
   display: grid;
@@ -633,6 +641,15 @@ main {
 
 .contact-card small {
   color: rgba(247, 245, 242, 0.7);
+}
+
+.contact-card small a {
+  color: var(--gold);
+  text-decoration: none;
+}
+
+.contact-card small a:hover {
+  color: var(--olive);
 }
 
 .contact-card.subtle {
