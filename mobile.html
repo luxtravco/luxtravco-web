@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Luxtravco | Mobile</title>
+  <link rel="icon" type="image/jpeg" href="logo.jpeg" />
+  <link rel="stylesheet" href="mobile.css" />
+  <script>
+    (function () {
+      const isMobile =
+        (navigator.userAgentData && navigator.userAgentData.mobile) ||
+        /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+          navigator.userAgent
+        );
+      const isSmall = window.matchMedia('(max-width: 900px)').matches;
+      if (!isMobile && !isSmall) {
+        window.location.replace('index.html' + window.location.hash);
+      }
+    })();
+  </script>
+</head>
+<body>
+  <header class="mobile-header">
+    <div class="brand">
+      <img src="logo.jpeg" alt="Luxtravco logo" />
+      <div>
+        <strong>Luxtravco</strong>
+        <small>Worldwide Chauffeured</small>
+      </div>
+    </div>
+    <a class="call-btn" href="tel:+19092350670">Call (909) 235‑0670</a>
+  </header>
+
+  <main>
+    <section class="hero">
+      <span class="eyebrow">Luxury Chauffeured Travel</span>
+      <h1>Black‑SUV chauffeured service for airport, corporate, and VIP travel.</h1>
+      <p>
+        Discreet, professional chauffeurs. Executive‑grade Suburban fleet. Reserve
+        point‑to‑point or hourly service in minutes.
+      </p>
+      <a class="primary-btn" href="#book">Reserve Service</a>
+      <img src="suburban-main.jpg" alt="Black Suburban" />
+    </section>
+
+    <section class="services">
+      <h2>Services</h2>
+      <div class="card">
+        <h3>Airport Transfers</h3>
+        <p>Flight tracking, curbside coordination, and meet‑and‑greet service.</p>
+      </div>
+      <div class="card">
+        <h3>Corporate Travel</h3>
+        <p>Quiet, reliable rides for roadshows, client meetings, and teams.</p>
+      </div>
+      <div class="card">
+        <h3>Events & Celebrations</h3>
+        <p>Discreet luxury service for weddings, galas, and private gatherings.</p>
+      </div>
+    </section>
+
+    <section class="pricing">
+      <h2>Signature Pricing</h2>
+      <div class="card">
+        <h3>Hourly Rate</h3>
+        <strong>$79 / hour</strong>
+        <p>2‑hour minimum. Executive Suburban with professional chauffeur.</p>
+      </div>
+      <div class="card">
+        <h3>LAX → OC</h3>
+        <small>5 mile radius from John Wayne</small>
+        <strong>$150</strong>
+        <p>Direct airport transfer in a black Suburban.</p>
+      </div>
+    </section>
+
+    <section id="book" class="booking">
+      <h2>Reserve Chauffeured Service</h2>
+      <form class="booking-form" id="booking-form">
+        <label>
+          Full Name
+          <input type="text" name="fullName" placeholder="Jordan Lane" required />
+        </label>
+        <label>
+          Pickup Date
+          <input type="date" name="pickupDate" required />
+        </label>
+        <label>
+          Pickup Time
+          <input type="time" name="pickupTime" />
+        </label>
+        <label class="autocomplete-field">
+          Pickup Location
+          <input
+            type="text"
+            name="pickupLocation"
+            placeholder="Enter pickup location"
+            required
+            data-autocomplete="pickup"
+            data-location-type="all"
+          />
+        </label>
+        <label class="autocomplete-field">
+          Dropoff Location
+          <input
+            type="text"
+            name="dropoffLocation"
+            placeholder="Enter dropoff location"
+            required
+            data-autocomplete="dropoff"
+            data-location-type="all"
+          />
+        </label>
+        <label>
+          Travelers
+          <input type="number" min="1" value="1" name="travelers" />
+        </label>
+        <label>
+          Kids
+          <input type="number" min="0" value="0" name="kids" />
+        </label>
+        <label>
+          Bags
+          <input type="number" min="0" value="0" name="bags" />
+        </label>
+        <label>
+          Contact Number
+          <input type="text" name="contactNumber" placeholder="(312) 555‑0198" />
+        </label>
+        <button class="primary-btn" type="submit" data-action="email-form">Submit Request</button>
+        <p class="form-status" id="form-status" aria-live="polite"></p>
+      </form>
+      <div class="contact">
+        <strong>(909) 235‑0670</strong>
+        <a href="mailto:info@luxtravco.com">info@luxtravco.com</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="mobile-footer">
+    <span>© 2026 Luxtravco. All rights reserved.</span>
+    <a href="index.html?desktop=1">View desktop site</a>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

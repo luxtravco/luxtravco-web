@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Luxtravco | Luxury Travel Company</title>
+  <link rel="icon" type="image/jpeg" href="logo.jpeg" />
+  <link rel="stylesheet" href="styles.css" />
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('desktop') === '1') {
+        sessionStorage.setItem('forceDesktop', '1');
+        return;
+      }
+      if (sessionStorage.getItem('forceDesktop') === '1') {
+        return;
+      }
+      const isMobile =
+        (navigator.userAgentData && navigator.userAgentData.mobile) ||
+        /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+          navigator.userAgent
+        );
+      const isSmall = window.matchMedia('(max-width: 900px)').matches;
+      if (isMobile || isSmall) {
+        const target = 'mobile.html' + window.location.hash;
+        if (!window.location.pathname.endsWith('mobile.html')) {
+          window.location.replace(target);
+        }
+      }
+    })();
+  </script>
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="halo"></div>
+
+  <div class="utility-bar">
+    <span>Chauffeured Service</span>
+    <span>24/7 Reservations • (909) 235‑0670 • info@luxtravco.com</span>
+  </div>
+
+  <header class="site-header">
+    <div class="brand">
+      <img src="logo.jpeg" alt="Luxtravco logo" class="brand-logo" />
+      <div class="brand-text">
+        <span>Luxtravco</span>
+        <small>Worldwide Chauffeured</small>
+      </div>
+    </div>
+    <nav class="site-nav">
+      <a href="#services">Services</a>
+      <a href="#fleet">Fleet</a>
+      <a href="#experience">Experience</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#book">Reserve</a>
+    </nav>
+    <a
+      class="ghost-btn"
+      href="tel:+19092350670"
+      data-action="call"
+      data-phone="+19092350670"
+      role="button"
+    >
+      Call (909) 235‑0670
+    </a>
+  </header>
+
+  <main>
+    <section class="hero reveal">
+      <div class="hero-content">
+        <span class="eyebrow">Luxury Chauffeured Travel</span>
+        <h1>Arrive in a black Suburban with a professional chauffeur.</h1>
+        <p class="lede">
+          Luxtravco delivers a discreet, white‑glove experience for airport transfers,
+          corporate travel, and special events. Reserve point‑to‑point or hourly service.
+        </p>
+        <div class="hero-cta">
+          <a class="primary-btn" href="#book">Reserve Chauffeured Service</a>
+          <a class="secondary-btn" href="#services">Explore Services</a>
+        </div>
+        <div class="hero-metrics">
+          <div>
+            <span>Professional</span>
+            <strong>Chauffeurs</strong>
+          </div>
+          <div>
+            <span>Service</span>
+            <strong>White‑Glove</strong>
+          </div>
+          <div>
+            <span>Vehicles</span>
+            <strong>Executive Grade</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="services" class="section reveal services">
+      <div class="section-header">
+        <h2>Chauffeured Services</h2>
+        <p>Tailored transportation for executives, families, and VIP guests.</p>
+      </div>
+      <div class="service-grid">
+        <article class="service-tile">
+          <h3>Airport Transfers</h3>
+          <p>Meet‑and‑greet service with real‑time flight tracking and curbside coordination.</p>
+          <span class="service-tag">LAX • SNA • LGB</span>
+        </article>
+        <article class="service-tile">
+          <h3>Corporate Travel</h3>
+          <p>Quiet, professional rides for executives, roadshows, and client hospitality.</p>
+          <span class="service-tag">On‑time guarantee</span>
+        </article>
+        <article class="service-tile">
+          <h3>Events & Celebrations</h3>
+          <p>Discreet, polished service for weddings, galas, and private gatherings.</p>
+          <span class="service-tag">Concierge support</span>
+        </article>
+      </div>
+    </section>
+
+    <section id="fleet" class="section reveal fleet-showcase">
+      <div class="section-header">
+        <h2>Chevy Suburban‑Only Fleet</h2>
+        <p>One flagship SUV. Discreet, spacious, and executive‑grade.</p>
+      </div>
+      <div class="fleet-grid">
+        <article class="fleet-card suburban-card float slow">
+          <img src="suburban-main.jpg" alt="2023 Chevy Suburban Premier" />
+          <div>
+            <h3>Suburban Premier</h3>
+            <p>Smooth ride, full‑size comfort, and a premier black‑SUV profile.</p>
+            <ul>
+              <li>7 passenger seating</li>
+              <li>Rear climate zones</li>
+              <li>Privacy glass</li>
+              <li>OnStar Safety &amp; Security services</li>
+              <li>OnStar Wifi</li>
+            </ul>
+          </div>
+        </article>
+        <article class="fleet-card float">
+          <img src="interior-black.jpg" alt="Jet black interior" class="no-filter" />
+          <div>
+            <h3>Jet Black Interior</h3>
+            <p>Jet‑black cabin with clean lines and a calm, private atmosphere.</p>
+            <ul>
+              <li>All‑black seating</li>
+              <li>Dark dash and panels</li>
+              <li>Quiet, composed cabin</li>
+            </ul>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="experience" class="section reveal experience">
+      <div class="experience-text">
+        <h2>Luxury feel, chauffeured ease.</h2>
+        <p>
+          Built for guests who want a discreet, professional chauffeur in a premium SUV.
+          We handle the details so you can focus on the destination.
+        </p>
+        <div class="experience-points">
+          <div>
+            <h4>Premium Presentation</h4>
+            <p>Arrive in a black Suburban that looks and feels executive‑grade.</p>
+          </div>
+          <div>
+            <h4>Chauffeur‑Led Service</h4>
+            <p>Professional arrivals, curbside coordination, and smooth departures.</p>
+          </div>
+        </div>
+      </div>
+      <div class="experience-panel">
+        <h3>Client feedback</h3>
+        <blockquote>
+          “The Suburban felt high‑end from curb to curb. Seamless experience.”
+          <span>— Marco T., Client</span>
+        </blockquote>
+        <blockquote>
+          “Luxtravco was on time, discreet, and professional. Highly recommend.”
+          <span>— Priya S., Client</span>
+        </blockquote>
+      </div>
+    </section>
+
+    <section id="pricing" class="section reveal pricing">
+      <div class="section-header">
+        <h2>Signature Route Pricing</h2>
+        <p>Flat pricing for chauffeur‑driven routes.</p>
+      </div>
+      <div class="pricing-grid">
+        <div class="pricing-card">
+          <h3>Hourly Rate</h3>
+          <small class="fine-print">*10 mile radius from John Wayne</small>
+          <p>Flexible booking for local trips or multi‑stop days.</p>
+          <span class="price">$79 / hour</span>
+          <ul>
+            <li>Ideal for meetings & events</li>
+            <li>Chauffeured Suburban included</li>
+          </ul>
+          <a
+            class="secondary-btn"
+            href="mailto:info@luxtravco.com?subject=Hourly%20Chauffeured%20Service&body=Hi%20Luxtravco%2C%0D%0A%0D%0AI%20would%20like%20to%20book%20the%20%2479%2Fhour%20chauffeured%20service.%0D%0ADate%2Ftime%3A%0D%0AEstimated%20hours%3A%0D%0APickup%20area%3A%0D%0AContact%20number%3A%0D%0A%0D%0AThanks!"
+          >
+            Book Hourly
+          </a>
+        </div>
+        <div class="pricing-card featured">
+          <h3>LAX → Orange County</h3>
+          <p>Chauffeured black‑SUV service paired with full‑size comfort.</p>
+          <span class="price">$149</span>
+          <ul>
+            <li>Chauffeured Suburban for the route</li>
+            <li>Airport pickup coordination</li>
+            <li>Professional presentation standard</li>
+          </ul>
+          <a
+            class="primary-btn"
+            href="mailto:info@luxtravco.com?subject=Reserve%20LAX%20%E2%86%92%20OC%20Chauffeured%20Route&body=Hi%20Luxtravco%2C%0D%0A%0D%0AI%20would%20like%20to%20reserve%20chauffeured%20service%20for%20the%20LAX%20%E2%86%92%20OC%20route%20(5%20mile%20radius%20from%20John%20Wayne).%0D%0AName%3A%0D%0APreferred%20date%2Ftime%3A%0D%0AContact%20number%3A%0D%0A%0D%0AThanks!"
+            data-action="email"
+            data-subject="Reserve LAX → OC Chauffeured Route"
+            data-body="Hi Luxtravco,%0D%0A%0D%0AI would like to reserve chauffeured service for the LAX → OC route (5 mile radius from John Wayne).%0D%0AName:%0D%0APreferred date/time:%0D%0AContact number:%0D%0A%0D%0AThanks!"
+          >
+            Reserve This Route
+          </a>
+        </div>
+        <div class="pricing-card">
+          <h3>Other Routes</h3>
+          <p>Request a quote for other airport or city routes.</p>
+          <span class="price">Request quote</span>
+          <ul>
+            <li>SoCal coverage</li>
+            <li>Same‑day availability</li>
+            <li>Priority support</li>
+          </ul>
+          <a
+            class="secondary-btn"
+            href="mailto:info@luxtravco.com?subject=Chauffeured%20Route%20Quote%20Request&body=Hi%20Luxtravco%2C%0D%0A%0D%0AI%20would%20like%20a%20quote%20for%20chauffeured%20service.%0D%0ARoute%20details%3A%0D%0APreferred%20date%2Ftime%3A%0D%0AContact%20number%3A%0D%0A%0D%0AThanks!"
+            data-action="email"
+            data-subject="Chauffeured Route Quote Request"
+            data-body="Hi Luxtravco,%0D%0A%0D%0AI would like a quote for chauffeured service.%0D%0ARoute details:%0D%0APreferred date/time:%0D%0AContact number:%0D%0A%0D%0AThanks!"
+          >
+            Request Quote
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <section id="book" class="section reveal booking">
+      <div class="booking-ui">
+        <div class="booking-panels">
+          <div class="booking-panel form-panel">
+            <div class="panel-header">
+              <h2>Where &amp; When</h2>
+              <div class="mode-toggle">
+                <button class="toggle active" type="button">Transfer</button>
+                <button class="toggle" type="button">Hourly</button>
+              </div>
+            </div>
+            <form class="booking-form booking-form-empire">
+              <label>
+                Full Name
+                <input type="text" placeholder="Jordan Lane" name="fullName" />
+              </label>
+              <div class="field-row">
+                <label>
+                  Pickup Date
+                  <input type="date" name="pickupDate" />
+                </label>
+                <label>
+                  Pickup Time
+                  <input type="time" name="pickupTime" />
+                </label>
+              </div>
+              <div class="location-stack">
+                <div class="location-block">
+                  <div class="location-tabs" role="tablist" aria-label="Pickup location type">
+                    <button class="location-tab active" type="button" data-type="all">Search All</button>
+                    <button class="location-tab" type="button" data-type="address">Address</button>
+                    <button class="location-tab" type="button" data-type="airport">Airport</button>
+                    <button class="location-tab" type="button" data-type="poi">Landmark</button>
+                  </div>
+                  <label class="autocomplete-field">
+                    Pickup Location
+                    <input
+                      type="text"
+                      placeholder="Enter pickup location"
+                      name="pickupLocation"
+                      data-autocomplete="pickup"
+                      data-location-type="all"
+                    />
+                  </label>
+                </div>
+                <div class="location-block">
+                  <div class="location-tabs" role="tablist" aria-label="Dropoff location type">
+                    <button class="location-tab active" type="button" data-type="all">Search All</button>
+                    <button class="location-tab" type="button" data-type="address">Address</button>
+                    <button class="location-tab" type="button" data-type="airport">Airport</button>
+                    <button class="location-tab" type="button" data-type="poi">Landmark</button>
+                  </div>
+                  <label class="autocomplete-field">
+                    Dropoff Location
+                    <input
+                      type="text"
+                      placeholder="Enter dropoff location"
+                      name="dropoffLocation"
+                      data-autocomplete="dropoff"
+                      data-location-type="all"
+                    />
+                  </label>
+                </div>
+              </div>
+              <button class="add-stop" type="button" data-action="add-stop">+ Add Stop</button>
+              <div class="count-row">
+                <label>
+                  Travelers
+                  <input type="number" min="1" value="1" name="travelers" />
+                </label>
+                <label>
+                  Kids
+                  <input type="number" min="0" value="0" name="kids" />
+                </label>
+                <label>
+                  Bags
+                  <input type="number" min="0" value="0" name="bags" />
+                </label>
+              </div>
+              <label>
+                Contact Number
+                <input type="text" placeholder="(312) 555‑0198" name="contactNumber" />
+              </label>
+              <div class="action-row">
+                <button class="secondary-btn" type="reset">Cancel</button>
+                <button class="primary-btn" type="button" data-action="email-form">
+                  Submit Request
+                </button>
+              </div>
+            </form>
+          </div>
+          <div class="booking-panel map-panel">
+            <div class="map-header">Create New Inquiry (Transfer)</div>
+            <div class="map-body">
+              <div id="booking-map" class="booking-map" aria-label="Map preview"></div>
+              <div class="map-fallback">Map preview will appear after locations are entered.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="booking-info">
+        <h3>Direct Line</h3>
+        <p>Questions about availability or itinerary details? Call anytime.</p>
+        <div class="contact-card">
+          <span>(909) 235‑0670</span>
+          <small>
+            <a href="mailto:info@luxtravco.com">info@luxtravco.com</a>
+          </small>
+        </div>
+        <div class="contact-card subtle">
+          <span>Serving Southern California clients.</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div>
+      <strong>Luxtravco</strong>
+      <span>LAX Black Limousine Style</span>
+    </div>
+    <div>
+      <span>Licensed & Insured • Driver‑First Operations</span>
+      <span>© 2026 Luxtravco. All rights reserved.</span>
+    </div>
+  </footer>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+  />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
