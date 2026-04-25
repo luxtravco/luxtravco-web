@@ -1,8 +1,0 @@
-name = "luxtravco-booking"
-main = "worker-index.js"
-compatibility_date = "2026-04-02"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "luxtravco_bookings"
-database_id = "f4af986f-9d2e-4fd5-ad28-067973492a4c"
