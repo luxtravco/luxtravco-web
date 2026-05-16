@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS bookings (
   stripe_session_id TEXT,
   payment_url TEXT,
   paid_at TEXT,
+  paid_notification_sent_at TEXT,
   customer_email TEXT,
   customer_user_id TEXT,
   driver_status TEXT,

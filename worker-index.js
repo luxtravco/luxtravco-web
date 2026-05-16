@@ -149,6 +149,89 @@ const sendApprovalEmail = async (env, booking, checkoutUrl) => {
   }
 };
 
+const bookingDetailsLines = (booking) => [
+  `Booking ID: #${booking.id || '—'}`,
+  `Customer: ${booking.full_name || '—'}`,
+  `Customer email: ${booking.customer_email || '—'}`,
+  `Contact number: ${booking.contact_number || '—'}`,
+  `Pickup date: ${booking.pickup_date || '—'}`,
+  `Pickup time: ${booking.pickup_time || '—'}`,
+  `Pickup: ${booking.pickup_location || '—'}`,
+  `Drop off: ${booking.dropoff_location || '—'}`,
+  `Stops: ${parseStopsText(booking.stops || '') || 'None'}`,
+  `Service type: ${booking.service_type || '—'}`,
+  `Booking mode: ${booking.booking_mode || '—'}`,
+  `Estimated hours: ${booking.estimated_hours || '—'}`,
+  `Total paid: ${formatCurrency(booking.estimated_total_cents || 0)}`,
+  `Travelers: ${booking.travelers || '—'}`,
+  `Kids: ${booking.kids || '—'}`,
+  `Bags: ${booking.bags || '—'}`,
+  `Stripe session: ${booking.stripe_session_id || '—'}`,
+  `Paid at: ${booking.paid_at || '—'}`,
+  `Created at: ${booking.created_at || '—'}`
+];
+
+const sendPaidBookingNotificationEmail = async (env, booking) => {
+  if (!env.RESEND_API_KEY) {
+    return { ok: false, error: 'Resend API key is not configured.' };
+  }
+
+  const to = PAID_BOOKING_NOTIFY_EMAIL;
+  const total = formatCurrency(booking.estimated_total_cents || 0);
+  const subject = `Paid Luxtravco booking #${booking.id || ''} - ${booking.full_name || 'Customer'}`;
+  const lines = [
+    'A Luxtravco booking was paid.',
+    '',
+    ...bookingDetailsLines(booking)
+  ];
+  const detailRows = bookingDetailsLines(booking)
+    .map((line) => {
+      const [label, ...rest] = line.split(': ');
+      return `
+        <tr>
+          <td style="padding:8px 10px;border-bottom:1px solid #eee;color:#555;width:170px;">${escapeHtml(label)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #eee;color:#111;">${escapeHtml(rest.join(': ') || '—')}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'luxtravco-booking/1.0'
+      },
+      body: JSON.stringify({
+        from: 'Luxtravco <info@luxtravco.com>',
+        to,
+        subject,
+        text: lines.join('\n'),
+        html: `
+          <div style="font-family:Arial,sans-serif;line-height:1.55;color:#111">
+            <h2 style="margin:0 0 8px">Paid Luxtravco booking</h2>
+            <p style="margin:0 0 14px"><strong>${escapeHtml(total)}</strong> was paid for booking #${escapeHtml(booking.id || '—')}.</p>
+            <table style="border-collapse:collapse;width:100%;max-width:760px;border:1px solid #eee">
+              ${detailRows}
+            </table>
+          </div>
+        `
+      })
+    });
+
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      return { ok: false, error: result?.message || 'Failed to send paid booking email.' };
+    }
+
+    return { ok: true, result };
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Failed to send paid booking email.' };
+  }
+};
+
 const approveBookingAndEmail = async (env, booking) => {
   const totalCents = Number(booking.estimated_total_cents || 0);
   if (!Number.isFinite(totalCents) || totalCents <= 0) {
@@ -199,6 +282,7 @@ const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/sit
 const DEFAULT_HOURLY_RATE = 79;
 const DEFAULT_ROUTE_PRICE = 149;
 const DEFAULT_ADMIN_EMAILS = 'info@luxtravco.com';
+const PAID_BOOKING_NOTIFY_EMAIL = 'emounier@icloud.com';
 const DEFAULT_SERVICE_TYPES = ['Executive Black SUV', 'Black Luxury Sedan'];
 const DEFAULT_SERVICE_TYPE = DEFAULT_SERVICE_TYPES[0];
 const DEFAULT_SERVICE_MILE_RATES = {
@@ -297,6 +381,7 @@ const ensureBookingColumns = async (env) => {
       ['stripe_session_id', 'TEXT'],
       ['payment_url', 'TEXT'],
       ['paid_at', 'TEXT'],
+      ['paid_notification_sent_at', 'TEXT'],
       ['customer_email', 'TEXT'],
       ['customer_user_id', 'TEXT'],
       ['driver_status', 'TEXT'],
@@ -2548,6 +2633,7 @@ const handleStripeWebhook = async (request, env, origin) => {
     return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
   }
 
+  await ensureBookingColumns(env);
   const bodyText = await request.text();
   const signatureHeader = request.headers.get('stripe-signature') || '';
   const verified = await verifyStripeWebhookSignature(bodyText, signatureHeader, env.STRIPE_WEBHOOK_SECRET);
@@ -2587,7 +2673,31 @@ const handleStripeWebhook = async (request, env, origin) => {
     )
       .bind('paid', paidAt, booking.id)
       .run();
-    await scheduleBookingReminders(env, booking);
+    const paidBooking = await env.DB.prepare('SELECT * FROM bookings WHERE id = ? LIMIT 1')
+      .bind(booking.id)
+      .first();
+    await scheduleBookingReminders(env, paidBooking || { ...booking, payment_status: 'paid', paid_at: paidAt });
+    if (!paidBooking?.paid_notification_sent_at) {
+      const notification = await sendPaidBookingNotificationEmail(
+        env,
+        paidBooking || { ...booking, payment_status: 'paid', paid_at: paidAt }
+      );
+      if (notification.ok) {
+        await env.DB.prepare(
+          `UPDATE bookings
+           SET paid_notification_sent_at = ?
+           WHERE id = ?`
+        )
+          .bind(new Date().toISOString(), booking.id)
+          .run();
+      } else {
+        return jsonResponse(
+          { ok: false, error: notification.error || 'Paid booking notification email failed' },
+          500,
+          origin
+        );
+      }
+    }
   } else if (eventType === 'checkout.session.expired') {
     await env.DB.prepare(
       `UPDATE bookings

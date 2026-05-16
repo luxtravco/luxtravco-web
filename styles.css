@@ -25,6 +25,9 @@
 
 html {
   color-scheme: dark;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 * {
@@ -39,6 +42,17 @@ body {
   color: var(--mist);
   min-height: 100vh;
   scroll-behavior: smooth;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+img,
+svg,
+video,
+canvas,
+iframe {
+  max-width: 100%;
 }
 
 h1, h2, h3, h4 {
@@ -82,6 +96,173 @@ h1, h2, h3, h4 {
 
 .utility-bar span:last-child {
   color: rgba(247, 245, 242, 0.85);
+}
+
+.app-promo-header {
+  position: relative;
+  z-index: 10;
+  background: #020202;
+  border-bottom: 1px solid rgba(240, 178, 71, 0.28);
+}
+
+.app-promo-inner {
+  width: min(100%, 1040px);
+  margin: 0 auto;
+  padding: 44px 32px 36px;
+  display: grid;
+  gap: 26px;
+}
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.app-brand-logo {
+  width: 86px;
+  height: 86px;
+  border-radius: 24px;
+  object-fit: contain;
+  padding: 8px;
+  background: #090909;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+
+.app-brand-copy strong {
+  display: block;
+  color: #f7f3e8;
+  font-size: clamp(1.85rem, 3.2vw, 2.45rem);
+  line-height: 1;
+  letter-spacing: 0;
+  font-weight: 800;
+}
+
+.app-brand-copy span {
+  display: block;
+  margin-top: 12px;
+  color: rgba(247, 243, 232, 0.52);
+  font-size: clamp(0.88rem, 1.5vw, 1.12rem);
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+
+.app-promo-title {
+  margin: 2px 0 -4px;
+  text-align: center;
+  color: #fffaf0;
+  font-size: clamp(1.5rem, 3.2vw, 2.35rem);
+  line-height: 1.1;
+  font-weight: 800;
+}
+
+.store-badges {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 22px;
+}
+
+.store-badge {
+  min-height: 76px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: #040404;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.store-badge small,
+.store-badge strong {
+  display: block;
+  line-height: 1;
+}
+
+.store-badge small {
+  margin-bottom: 6px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.86rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.store-badge strong {
+  font-size: clamp(1.35rem, 2.4vw, 2rem);
+  letter-spacing: 0;
+  font-weight: 800;
+}
+
+.store-icon {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.store-icon-apple {
+  width: 34px;
+  height: 38px;
+  border-radius: 44% 44% 48% 48%;
+  background: #fff;
+}
+
+.store-icon-apple::before {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 16px;
+  right: 3px;
+  top: -13px;
+  border-radius: 14px 2px 14px 2px;
+  background: #fff;
+  transform: rotate(32deg);
+}
+
+.store-icon-apple::after {
+  content: "";
+  position: absolute;
+  width: 11px;
+  height: 15px;
+  right: -4px;
+  top: 11px;
+  border-radius: 50%;
+  background: #040404;
+}
+
+.store-icon-play {
+  width: 0;
+  height: 0;
+  border-top: 22px solid transparent;
+  border-bottom: 22px solid transparent;
+  border-left: 36px solid #39d46f;
+}
+
+.store-icon-play::before {
+  content: "";
+  position: absolute;
+  left: -34px;
+  top: -18px;
+  width: 0;
+  height: 0;
+  border-top: 18px solid transparent;
+  border-bottom: 18px solid transparent;
+  border-left: 30px solid #2b8fff;
+  transform: scaleY(0.72);
+  transform-origin: left center;
+}
+
+.store-icon-play::after {
+  content: "";
+  position: absolute;
+  left: -21px;
+  top: -10px;
+  width: 0;
+  height: 0;
+  border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
+  border-left: 17px solid #ffcf38;
 }
 
 .site-header {
@@ -194,6 +375,7 @@ main {
   max-width: var(--max-width);
   margin: 0 auto;
   padding: 40px 32px 80px;
+  min-width: 0;
 }
 
 .hero {
@@ -212,6 +394,7 @@ main {
   background-position: center;
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
   margin: 0 calc(50% - 50vw);
+  max-width: 100vw;
 }
 
 .hero::before {
@@ -727,12 +910,14 @@ main {
   border: 1px solid rgba(240, 178, 71, 0.2);
   box-shadow: var(--shadow);
   padding: 24px;
+  min-width: 0;
 }
 
 .booking-panels {
   display: grid;
   gap: 20px;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  min-width: 0;
 }
 
 .booking-panel {
@@ -744,6 +929,7 @@ main {
   padding: 20px;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .panel-header {
@@ -831,6 +1017,7 @@ body.booking-hourly .hourly-only {
   border: 1px solid rgba(240, 178, 71, 0.22);
   border-radius: 14px;
   background: rgba(240, 178, 71, 0.06);
+  min-width: 0;
 }
 
 .estimate-card span {
@@ -855,6 +1042,8 @@ body.booking-hourly .hourly-only {
   border-radius: 8px;
   padding: 10px 12px;
   color: var(--mist);
+  width: 100%;
+  min-width: 0;
 }
 
 .service-select-card {
@@ -868,6 +1057,7 @@ body.booking-hourly .hourly-only {
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.16em;
+  min-width: 0;
 }
 
 .service-select-card select {
@@ -907,6 +1097,7 @@ body.booking-hourly .hourly-only {
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  min-width: 0;
 }
 
 .location-block {
@@ -1037,6 +1228,7 @@ body.booking-hourly .hourly-only {
   justify-content: space-between;
   gap: 12px;
   margin-top: 8px;
+  min-width: 0;
 }
 
 .map-panel {
@@ -1182,6 +1374,35 @@ body.booking-hourly .hourly-only {
 }
 
 @media (max-width: 800px) {
+  .app-promo-inner {
+    padding: 30px 24px 34px;
+    gap: 22px;
+  }
+
+  .app-brand {
+    gap: 16px;
+  }
+
+  .app-brand-logo {
+    width: 72px;
+    height: 72px;
+    border-radius: 20px;
+  }
+
+  .store-badges {
+    gap: 14px;
+  }
+
+  .store-badge {
+    min-height: 64px;
+    border-radius: 18px;
+    gap: 12px;
+  }
+
+  .store-badge small {
+    font-size: 0.68rem;
+  }
+
   .utility-bar {
     flex-direction: column;
     align-items: flex-start;
@@ -1224,6 +1445,47 @@ body.booking-hourly .hourly-only {
 @media (max-width: 600px) {
   body {
     font-size: 0.95rem;
+  }
+
+  .app-promo-inner {
+    padding: 28px 18px 34px;
+    gap: 20px;
+  }
+
+  .app-brand-logo {
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    padding: 6px;
+  }
+
+  .app-brand-copy strong {
+    font-size: 1.45rem;
+  }
+
+  .app-brand-copy span {
+    margin-top: 8px;
+    font-size: 0.72rem;
+    letter-spacing: 0.2em;
+  }
+
+  .app-promo-title {
+    font-size: clamp(1.35rem, 7vw, 1.9rem);
+  }
+
+  .store-badges {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .store-badge {
+    min-height: 64px;
+    justify-content: flex-start;
+    padding: 0 24px;
+  }
+
+  .store-badge strong {
+    font-size: 1.45rem;
   }
 
   .utility-bar {
@@ -1298,6 +1560,8 @@ body.booking-hourly .hourly-only {
   margin: 12px 0 4px;
   display: flex;
   justify-content: flex-start;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .turnstile-wrap > div {
@@ -1310,3 +1574,15 @@ body.booking-hourly .hourly-only {
 .roundtrip-leg-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .stop-actions { display:flex; justify-content:space-between; align-items:center; gap:12px; }
 .remove-stop { background: transparent; border: 1px solid rgba(240,178,71,0.35); color: var(--gold); border-radius: 999px; padding: 8px 12px; font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; }
+
+@media (max-width: 600px) {
+  .roundtrip-leg-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stop-actions,
+  .action-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

@@ -8,6 +8,9 @@
 
 html {
   color-scheme: dark;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 * {
@@ -21,11 +24,185 @@ body {
   background: var(--page-bg);
   color: var(--mist);
   line-height: 1.5;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+img,
+svg,
+video,
+canvas,
+iframe {
+  max-width: 100%;
 }
 
 a {
   color: inherit;
   text-decoration: none;
+}
+
+.app-promo-header {
+  background: #020202;
+  border-bottom: 1px solid rgba(240, 178, 71, 0.28);
+}
+
+.app-promo-inner {
+  padding: 28px 18px 34px;
+  display: grid;
+  gap: 20px;
+}
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.app-brand-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  object-fit: contain;
+  padding: 6px;
+  background: #090909;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+
+.app-brand-copy strong {
+  display: block;
+  color: #f7f3e8;
+  font-size: 1.45rem;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.app-brand-copy span {
+  display: block;
+  margin-top: 8px;
+  color: rgba(247, 243, 232, 0.52);
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.app-promo-title {
+  margin: 2px 0 -4px;
+  text-align: center;
+  color: #fffaf0;
+  font-size: clamp(1.35rem, 7vw, 1.9rem);
+  line-height: 1.1;
+  font-weight: 800;
+}
+
+.store-badges {
+  display: grid;
+  gap: 12px;
+}
+
+.store-badge {
+  min-height: 64px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: #040404;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 24px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  min-width: 0;
+}
+
+.store-badge small,
+.store-badge strong {
+  display: block;
+  line-height: 1;
+  min-width: 0;
+}
+
+.store-badge small {
+  margin-bottom: 6px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.store-badge strong {
+  font-size: 1.45rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.store-icon {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.store-icon-apple {
+  width: 30px;
+  height: 34px;
+  border-radius: 44% 44% 48% 48%;
+  background: #fff;
+}
+
+.store-icon-apple::before {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 14px;
+  right: 3px;
+  top: -11px;
+  border-radius: 14px 2px 14px 2px;
+  background: #fff;
+  transform: rotate(32deg);
+}
+
+.store-icon-apple::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 14px;
+  right: -4px;
+  top: 10px;
+  border-radius: 50%;
+  background: #040404;
+}
+
+.store-icon-play {
+  width: 0;
+  height: 0;
+  border-top: 20px solid transparent;
+  border-bottom: 20px solid transparent;
+  border-left: 32px solid #39d46f;
+}
+
+.store-icon-play::before {
+  content: "";
+  position: absolute;
+  left: -31px;
+  top: -16px;
+  width: 0;
+  height: 0;
+  border-top: 16px solid transparent;
+  border-bottom: 16px solid transparent;
+  border-left: 27px solid #2b8fff;
+  transform: scaleY(0.72);
+  transform-origin: left center;
+}
+
+.store-icon-play::after {
+  content: "";
+  position: absolute;
+  left: -20px;
+  top: -9px;
+  width: 0;
+  height: 0;
+  border-top: 9px solid transparent;
+  border-bottom: 9px solid transparent;
+  border-left: 16px solid #ffcf38;
 }
 
 .mobile-header {
@@ -40,6 +217,7 @@ a {
   grid-template-columns: 56px 1fr;
   gap: 12px;
   align-items: center;
+  min-width: 0;
 }
 
 .brand img {
@@ -55,6 +233,7 @@ a {
 .brand strong {
   text-transform: uppercase;
   letter-spacing: 0.18em;
+  overflow-wrap: anywhere;
 }
 
 .brand small {
@@ -63,6 +242,7 @@ a {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: rgba(247, 245, 242, 0.6);
+  overflow-wrap: anywhere;
 }
 
 .call-btn {
@@ -75,6 +255,9 @@ a {
   text-transform: uppercase;
   letter-spacing: 0.16em;
   font-size: 0.7rem;
+  max-width: 100%;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .mobile-actions {
@@ -88,6 +271,7 @@ a {
 
 main {
   padding: 20px 16px 60px;
+  min-width: 0;
 }
 
 .hero {
@@ -130,6 +314,9 @@ h1 {
   letter-spacing: 0.18em;
   font-size: 0.7rem;
   font-weight: 600;
+  max-width: 100%;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .mobile-route-list {
@@ -172,6 +359,7 @@ h2 {
   border-radius: 12px;
   overflow: hidden;
   padding: 16px;
+  min-width: 0;
 }
 
 .location-stack {
@@ -218,6 +406,7 @@ h2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  min-width: 0;
 }
 
 .toggle {
@@ -230,6 +419,8 @@ h2 {
   letter-spacing: 0.14em;
   font-size: 0.68rem;
   font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .toggle.active {
@@ -280,6 +471,7 @@ body.booking-hourly .hourly-only {
   border: 1px solid rgba(240, 178, 71, 0.2);
   border-radius: 12px;
   background: rgba(240, 178, 71, 0.06);
+  min-width: 0;
 }
 
 .estimate-card span {
@@ -352,6 +544,8 @@ body.booking-hourly .hourly-only {
   border-radius: 8px;
   padding: 10px 12px;
   color: var(--mist);
+  width: 100%;
+  min-width: 0;
 }
 
 .service-select-card select {
@@ -394,6 +588,8 @@ body.booking-hourly .hourly-only {
   margin: 12px 0 4px;
   display: flex;
   justify-content: flex-start;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .turnstile-wrap > div {
@@ -405,3 +601,31 @@ body.booking-hourly .hourly-only {
 .roundtrip-leg-grid { display:grid; gap:12px; }
 .stop-actions { display:flex; justify-content:space-between; align-items:center; gap:12px; }
 .remove-stop { background: transparent; border: 1px solid rgba(240,178,71,0.35); color: var(--gold); border-radius: 999px; padding: 8px 12px; font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; }
+
+@media (max-width: 380px) {
+  .app-promo-inner,
+  .mobile-header,
+  main,
+  .mobile-footer {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .store-badge {
+    padding: 0 16px;
+  }
+
+  .store-badge strong {
+    font-size: 1.25rem;
+  }
+
+  .estimate-card,
+  .mode-toggle {
+    grid-template-columns: 1fr;
+  }
+
+  .stop-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
