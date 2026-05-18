@@ -73,11 +73,116 @@ const sendSlack = async (env, message) => {
   }
 };
 
-const sendApprovalEmail = async (env, booking, checkoutUrl) => {
+const sendLuxEmail = async (env, { to, subject, text, html, headers }) => {
   if (!env.RESEND_API_KEY) {
     return { ok: false, error: 'Resend API key is not configured.' };
   }
 
+  const recipients = Array.isArray(to) ? to.filter(Boolean) : [String(to || '').trim()].filter(Boolean);
+  if (!recipients.length) {
+    return { ok: false, error: 'Email recipient is missing.' };
+  }
+
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'luxtravco-booking/1.0'
+      },
+      body: JSON.stringify({
+        from: 'Luxtravco <info@luxtravco.com>',
+        to: recipients,
+        subject,
+        text,
+        html,
+        headers
+      })
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      return { ok: false, error: result?.message || 'Failed to send email.' };
+    }
+    return { ok: true, result };
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Failed to send email.' };
+  }
+};
+
+const luxEmailShell = ({ eyebrow = 'LUXTRAVCO', title, intro = '', body = '', ctaLabel = '', ctaUrl = '' }) => `
+  <div style="margin:0;padding:0;background:#080807;color:#f7f2e8;font-family:Arial,Helvetica,sans-serif;">
+    <div style="display:none;max-height:0;overflow:hidden;color:transparent;opacity:0;">
+      ${escapeHtml(intro || title || 'Luxtravco booking update')}
+    </div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#080807;margin:0;padding:0;">
+      <tr>
+        <td align="center" style="padding:34px 14px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;max-width:680px;background:#11100f;border:1px solid #2b2419;border-radius:22px;overflow:hidden;box-shadow:0 22px 60px rgba(0,0,0,0.38);">
+            <tr>
+              <td style="padding:0;background:linear-gradient(135deg,#181512 0%,#0d0c0b 58%,#20180c 100%);border-bottom:1px solid #2b2419;">
+                <div style="padding:28px 28px 24px;">
+                  <div style="display:inline-block;padding:7px 11px;border:1px solid rgba(240,178,71,0.42);border-radius:999px;color:#f0b247;font-size:11px;letter-spacing:2.4px;font-weight:700;">
+                    ${escapeHtml(eyebrow)}
+                  </div>
+                  <h1 style="margin:18px 0 0;color:#fff7e8;font-size:30px;line-height:1.12;letter-spacing:0;font-weight:700;">
+                    ${escapeHtml(title)}
+                  </h1>
+                  ${intro ? `<p style="margin:13px 0 0;color:#d8cdbb;font-size:15px;line-height:1.65;">${escapeHtml(intro)}</p>` : ''}
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:26px 28px 8px;color:#f7f2e8;font-size:15px;line-height:1.65;">
+                ${body}
+                ${
+                  ctaLabel && ctaUrl
+                    ? `<div style="padding:18px 0 8px;">
+                        <a href="${escapeHtml(ctaUrl)}" style="display:inline-block;padding:13px 22px;border-radius:999px;background:#f0b247;color:#11100f;text-decoration:none;font-weight:800;letter-spacing:0.4px;">
+                          ${escapeHtml(ctaLabel)}
+                        </a>
+                      </div>`
+                    : ''
+                }
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 28px 28px;">
+                <div style="height:1px;background:#2b2419;margin-bottom:16px;"></div>
+                <p style="margin:0;color:#a99d8b;font-size:12px;line-height:1.6;">
+                  Luxtravco<br>
+                  Premium chauffeured service<br>
+                  <a href="mailto:info@luxtravco.com" style="color:#f0b247;text-decoration:none;">info@luxtravco.com</a>
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </div>
+`;
+
+const luxInfoGrid = (items) => `
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:separate;border-spacing:0;margin:18px 0;border:1px solid #2b2419;border-radius:16px;overflow:hidden;background:#151311;">
+    ${items
+      .map(
+        ([label, value]) => `
+          <tr>
+            <td style="padding:12px 14px;border-bottom:1px solid #2b2419;color:#b6aa99;width:38%;font-size:12px;text-transform:uppercase;letter-spacing:1.4px;font-weight:700;">
+              ${escapeHtml(label)}
+            </td>
+            <td style="padding:12px 14px;border-bottom:1px solid #2b2419;color:#fff7e8;font-size:14px;line-height:1.45;">
+              ${escapeHtml(value || '—')}
+            </td>
+          </tr>
+        `
+      )
+      .join('')}
+  </table>
+`;
+
+const sendApprovalEmail = async (env, booking, checkoutUrl) => {
   const to = String(booking.customer_email || '').trim();
   if (!to) {
     return { ok: false, error: 'Customer email is missing.' };
@@ -100,53 +205,28 @@ const sendApprovalEmail = async (env, booking, checkoutUrl) => {
     'Luxtravco'
   ];
 
-  try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'luxtravco-booking/1.0'
-      },
-      body: JSON.stringify({
-        from: 'Luxtravco <info@luxtravco.com>',
-        to,
-        subject: 'Your Luxtravco booking is approved for payment',
-        text: lines.join('\n'),
-        html: `
-          <div style="font-family:Arial,sans-serif;line-height:1.6;color:#111">
-            <h2 style="margin:0 0 12px">Your Luxtravco booking is approved</h2>
-            <p>Hello ${escapeHtml(booking.full_name || 'there')},</p>
-            <p>Your booking has been reviewed and approved for payment.</p>
-            <ul>
-              <li><strong>Route:</strong> ${escapeHtml(booking.pickup_location || '—')} → ${escapeHtml(booking.dropoff_location || '—')}</li>
-              <li><strong>Pickup date:</strong> ${escapeHtml(booking.pickup_date || '—')}</li>
-              <li><strong>Pickup time:</strong> ${escapeHtml(booking.pickup_time || '—')}</li>
-              <li><strong>Service total:</strong> ${escapeHtml(total)}</li>
-            </ul>
-            <p>
-              <a href="${escapeHtml(checkoutUrl)}" style="display:inline-block;padding:12px 18px;border-radius:999px;background:#f0b247;color:#111;text-decoration:none;font-weight:bold;">
-                Pay Now
-              </a>
-            </p>
-            <p>If you have any questions, reply to this email or contact info@luxtravco.com.</p>
-          </div>
-        `
-      })
-    });
-
-    const result = await response.json().catch(() => null);
-    if (!response.ok) {
-      return {
-        ok: false,
-        error: result?.message || 'Failed to send approval email.'
-      };
-    }
-
-    return { ok: true, result };
-  } catch (error) {
-    return { ok: false, error: error?.message || 'Failed to send approval email.' };
-  }
+  return sendLuxEmail(env, {
+    to,
+    subject: 'Your Luxtravco booking is approved for payment',
+    text: lines.join('\n'),
+    html: luxEmailShell({
+      eyebrow: 'PAYMENT REQUEST',
+      title: 'Booking approved',
+      intro: 'Your reservation has been reviewed. Secure payment is required to confirm the trip.',
+      ctaLabel: 'Pay securely',
+      ctaUrl: checkoutUrl,
+      body: `
+        <p style="margin:0 0 12px;color:#f7f2e8;">Hello ${escapeHtml(booking.full_name || 'there')},</p>
+        <p style="margin:0;color:#d8cdbb;">Your booking has been approved for payment.</p>
+        ${luxInfoGrid([
+          ['Route', `${booking.pickup_location || '—'} -> ${booking.dropoff_location || '—'}`],
+          ['Pickup date', booking.pickup_date || '—'],
+          ['Pickup time', booking.pickup_time || '—'],
+          ['Service total', total]
+        ])}
+      `
+    })
+  });
 };
 
 const bookingDetailsLines = (booking) => [
@@ -166,16 +246,43 @@ const bookingDetailsLines = (booking) => [
   `Travelers: ${booking.travelers || '—'}`,
   `Kids: ${booking.kids || '—'}`,
   `Bags: ${booking.bags || '—'}`,
-  `Stripe session: ${booking.stripe_session_id || '—'}`,
   `Paid at: ${booking.paid_at || '—'}`,
   `Created at: ${booking.created_at || '—'}`
 ];
 
-const sendPaidBookingNotificationEmail = async (env, booking) => {
-  if (!env.RESEND_API_KEY) {
-    return { ok: false, error: 'Resend API key is not configured.' };
-  }
+const bookingDetailsHtmlRows = (booking) =>
+  bookingDetailsLines(booking)
+    .map((line) => {
+      const [label, ...rest] = line.split(': ');
+      return `
+        <tr>
+          <td style="padding:11px 13px;border-bottom:1px solid #2b2419;color:#b6aa99;width:190px;font-size:12px;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;">${escapeHtml(label)}</td>
+          <td style="padding:11px 13px;border-bottom:1px solid #2b2419;color:#fff7e8;font-size:14px;line-height:1.45;">${escapeHtml(rest.join(': ') || '—')}</td>
+        </tr>
+      `;
+    })
+    .join('');
 
+const sendBookingMadeAdminEmail = async (env, booking) => {
+  const subject = `New Luxtravco booking request #${booking.id || ''} - ${booking.full_name || 'Customer'}`;
+  return sendLuxEmail(env, {
+    to: PAID_BOOKING_NOTIFY_EMAIL,
+    subject,
+    text: ['A new Luxtravco booking request was submitted.', '', ...bookingDetailsLines(booking)].join('\n'),
+    html: luxEmailShell({
+      eyebrow: 'NEW REQUEST',
+      title: 'New booking request',
+      intro: `Booking #${booking.id || '—'} is pending review.`,
+      body: `
+        <table role="presentation" style="border-collapse:collapse;width:100%;border:1px solid #2b2419;border-radius:16px;overflow:hidden;background:#151311;">
+          ${bookingDetailsHtmlRows(booking)}
+        </table>
+      `
+    })
+  });
+};
+
+const sendPaidBookingNotificationEmail = async (env, booking) => {
   const to = PAID_BOOKING_NOTIFY_EMAIL;
   const total = formatCurrency(booking.estimated_total_cents || 0);
   const subject = `Paid Luxtravco booking #${booking.id || ''} - ${booking.full_name || 'Customer'}`;
@@ -184,52 +291,153 @@ const sendPaidBookingNotificationEmail = async (env, booking) => {
     '',
     ...bookingDetailsLines(booking)
   ];
-  const detailRows = bookingDetailsLines(booking)
-    .map((line) => {
-      const [label, ...rest] = line.split(': ');
-      return `
-        <tr>
-          <td style="padding:8px 10px;border-bottom:1px solid #eee;color:#555;width:170px;">${escapeHtml(label)}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #eee;color:#111;">${escapeHtml(rest.join(': ') || '—')}</td>
-        </tr>
-      `;
-    })
-    .join('');
+  const detailRows = bookingDetailsHtmlRows(booking);
 
-  try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'luxtravco-booking/1.0'
-      },
-      body: JSON.stringify({
-        from: 'Luxtravco <info@luxtravco.com>',
-        to,
-        subject,
-        text: lines.join('\n'),
-        html: `
-          <div style="font-family:Arial,sans-serif;line-height:1.55;color:#111">
-            <h2 style="margin:0 0 8px">Paid Luxtravco booking</h2>
-            <p style="margin:0 0 14px"><strong>${escapeHtml(total)}</strong> was paid for booking #${escapeHtml(booking.id || '—')}.</p>
-            <table style="border-collapse:collapse;width:100%;max-width:760px;border:1px solid #eee">
-              ${detailRows}
-            </table>
-          </div>
+  return sendLuxEmail(env, {
+    to,
+    subject,
+    text: lines.join('\n'),
+    html: luxEmailShell({
+      eyebrow: 'PAYMENT RECEIVED',
+      title: 'Paid booking',
+      intro: `${total} was paid for booking #${booking.id || '—'}.`,
+      body: `
+        <table role="presentation" style="border-collapse:collapse;width:100%;border:1px solid #2b2419;border-radius:16px;overflow:hidden;background:#151311;">
+          ${detailRows}
+        </table>
+      `
+    })
+  });
+};
+
+const sendPaymentApprovedCustomerEmail = async (env, booking) => {
+  const to = String(booking.customer_email || '').trim();
+  if (!to) {
+    return { ok: false, error: 'Customer email is missing.' };
+  }
+
+  const total = formatCurrency(booking.estimated_total_cents || 0);
+  const subject = `Payment approved - Luxtravco booking #${booking.id || ''}`;
+  const route = `${booking.pickup_location || '—'} → ${booking.dropoff_location || '—'}`;
+  const lines = [
+    `Hello ${booking.full_name || 'there'},`,
+    '',
+    `Your payment is approved and Luxtravco booking #${booking.id || '—'} is confirmed.`,
+    `Total paid: ${total}`,
+    `Pickup date: ${booking.pickup_date || '—'}`,
+    `Pickup time: ${booking.pickup_time || '—'}`,
+    `Route: ${route}`,
+    `Stops: ${parseStopsText(booking.stops || '') || 'None'}`,
+    `Vehicle: ${booking.service_type || '—'}`,
+    '',
+    'Your driver will use these booking details for the trip.',
+    'If you have any questions, reply to this email or contact info@luxtravco.com.',
+    '',
+    'Luxtravco'
+  ];
+
+  return sendLuxEmail(env, {
+    to,
+    subject,
+    text: lines.join('\n'),
+    html: luxEmailShell({
+      eyebrow: 'PAID',
+      title: 'Payment approved',
+      intro: `Your payment is approved and booking #${booking.id || '—'} is confirmed.`,
+      body: `
+        <p style="margin:0 0 12px;color:#f7f2e8;">Hello ${escapeHtml(booking.full_name || 'there')},</p>
+        <p style="margin:0;color:#d8cdbb;">Your driver will use these booking details for the trip.</p>
+        ${luxInfoGrid([
+          ['Total paid', total],
+          ['Pickup date', booking.pickup_date || '—'],
+          ['Pickup time', booking.pickup_time || '—'],
+          ['Route', route],
+          ['Stops', parseStopsText(booking.stops || '') || 'None'],
+          ['Vehicle', booking.service_type || '—']
+        ])}
+      `
+    })
+  });
+};
+
+const sendPaymentReceivedCustomerEmail = sendPaymentApprovedCustomerEmail;
+
+const sendBookingCancelledEmails = async (env, booking, policy) => {
+  const customerEmail = String(booking.customer_email || '').trim();
+  const refundPercent = Number(policy?.refundPercent ?? booking.cancellation_refund_percent ?? 0);
+  const refundMessage = policy?.message || `Refund eligibility: ${refundPercent}%`;
+  const customerLines = [
+    `Hello ${booking.full_name || 'there'},`,
+    '',
+    `Your Luxtravco booking #${booking.id || '—'} has been cancelled.`,
+    `Refund eligibility: ${refundPercent}%`,
+    refundMessage,
+    '',
+    `Pickup date: ${booking.pickup_date || '—'}`,
+    `Pickup time: ${booking.pickup_time || '—'}`,
+    `Pickup: ${booking.pickup_location || '—'}`,
+    `Drop off: ${booking.dropoff_location || '—'}`,
+    '',
+    'If you have questions, reply to this email or contact info@luxtravco.com.',
+    '',
+    'Luxtravco'
+  ];
+  const adminLines = [
+    'A Luxtravco booking was cancelled.',
+    `Refund eligibility: ${refundPercent}%`,
+    '',
+    ...bookingDetailsLines(booking)
+  ];
+  const sends = [
+    sendLuxEmail(env, {
+      to: PAID_BOOKING_NOTIFY_EMAIL,
+      subject: `Luxtravco booking cancelled #${booking.id || ''} - ${booking.full_name || 'Customer'}`,
+      text: adminLines.join('\n'),
+      html: luxEmailShell({
+        eyebrow: 'CANCELLATION',
+        title: 'Booking cancelled',
+        intro: `Booking #${booking.id || '—'} was cancelled. Refund eligibility: ${refundPercent}%.`,
+        body: `
+          <table role="presentation" style="border-collapse:collapse;width:100%;border:1px solid #2b2419;border-radius:16px;overflow:hidden;background:#151311;">
+            ${bookingDetailsHtmlRows(booking)}
+          </table>
         `
       })
-    });
+    })
+  ];
 
-    const result = await response.json().catch(() => null);
-    if (!response.ok) {
-      return { ok: false, error: result?.message || 'Failed to send paid booking email.' };
-    }
-
-    return { ok: true, result };
-  } catch (error) {
-    return { ok: false, error: error?.message || 'Failed to send paid booking email.' };
+  if (customerEmail) {
+    sends.push(
+      sendLuxEmail(env, {
+        to: customerEmail,
+        subject: `Luxtravco booking #${booking.id || ''} cancelled`,
+        text: customerLines.join('\n'),
+        html: luxEmailShell({
+          eyebrow: 'CANCELLATION',
+          title: 'Booking cancelled',
+          intro: `Your Luxtravco booking #${booking.id || '—'} has been cancelled.`,
+          body: `
+            <p style="margin:0 0 12px;color:#f7f2e8;">Hello ${escapeHtml(booking.full_name || 'there')},</p>
+            <div style="margin:16px 0;padding:16px;border:1px solid rgba(240,178,71,0.36);border-radius:16px;background:#1b160f;">
+              <div style="color:#f0b247;font-size:12px;text-transform:uppercase;letter-spacing:1.5px;font-weight:800;">Refund eligibility</div>
+              <div style="margin-top:5px;color:#fff7e8;font-size:26px;font-weight:800;">${escapeHtml(refundPercent)}%</div>
+              <p style="margin:8px 0 0;color:#d8cdbb;font-size:14px;">${escapeHtml(refundMessage)}</p>
+            </div>
+            ${luxInfoGrid([
+              ['Pickup date', booking.pickup_date || '—'],
+              ['Pickup time', booking.pickup_time || '—'],
+              ['Pickup', booking.pickup_location || '—'],
+              ['Drop off', booking.dropoff_location || '—']
+            ])}
+          `
+        })
+      })
+    );
   }
+
+  const results = await Promise.all(sends);
+  const failed = results.find((result) => !result.ok);
+  return failed || { ok: true, results };
 };
 
 const approveBookingAndEmail = async (env, booking) => {
@@ -239,6 +447,7 @@ const approveBookingAndEmail = async (env, booking) => {
   }
 
   const siteUrl = env.SITE_URL || 'https://luxtravco.com';
+  const bookingApiUrl = env.BOOKING_API_URL || 'https://luxtravco-booking.luxtravco1.workers.dev';
   const pricing = await getPricingSettings(env);
   const checkout = await createStripeCheckoutSession(env, {
     amountCents: totalCents,
@@ -252,7 +461,7 @@ const approveBookingAndEmail = async (env, booking) => {
       booking.booking_mode === 'hourly'
         ? `Luxtravco mileage-based chauffeured service`
         : `Luxtravco mileage-based transfer service`,
-    successUrl: `${siteUrl}/?payment=success&booking_id=${booking.id}`,
+    successUrl: `${bookingApiUrl}/payment/success?booking_id=${booking.id}&session_id={CHECKOUT_SESSION_ID}`,
     cancelUrl: `${siteUrl}/?payment=cancelled&booking_id=${booking.id}`
   });
 
@@ -281,7 +490,7 @@ const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_TwCvQ_u0VglyXCy6Sgciwg_3XulTaU1
 const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 const DEFAULT_HOURLY_RATE = 79;
 const DEFAULT_ROUTE_PRICE = 149;
-const DEFAULT_ADMIN_EMAILS = 'info@luxtravco.com';
+const DEFAULT_ADMIN_EMAILS = 'info@luxtravco.com,emounier@icloud.com';
 const PAID_BOOKING_NOTIFY_EMAIL = 'emounier@icloud.com';
 const DEFAULT_SERVICE_TYPES = ['Executive Black SUV', 'Black Luxury Sedan'];
 const DEFAULT_SERVICE_TYPE = DEFAULT_SERVICE_TYPES[0];
@@ -382,6 +591,7 @@ const ensureBookingColumns = async (env) => {
       ['payment_url', 'TEXT'],
       ['paid_at', 'TEXT'],
       ['paid_notification_sent_at', 'TEXT'],
+      ['payment_receipt_sent_at', 'TEXT'],
       ['customer_email', 'TEXT'],
       ['customer_user_id', 'TEXT'],
       ['driver_status', 'TEXT'],
@@ -528,6 +738,7 @@ const ensurePricingSettings = async (env) => {
     const defaults = [
       ['hourly_rate', String(DEFAULT_HOURLY_RATE)],
       ['admin_emails', String(env.ADMIN_EMAILS || DEFAULT_ADMIN_EMAILS)],
+      ['driver_emails', String(env.DRIVER_EMAILS || '')],
       ['service_types', JSON.stringify(DEFAULT_SERVICE_TYPES)],
       ['default_service_type', DEFAULT_SERVICE_TYPE],
       ['route_count', String(DEFAULT_FEATURED_ROUTES.length)],
@@ -944,12 +1155,16 @@ const getPricingSettings = async (env) => {
   const adminEmails = normalizeAdminEmails(
     map.get('admin_emails') || env.ADMIN_EMAILS || DEFAULT_ADMIN_EMAILS
   );
+  const driverEmails = normalizeAdminEmails(
+    map.get('driver_emails') || env.DRIVER_EMAILS || ''
+  );
   return {
     hourlyRate: Number.isFinite(hourlyRate) && hourlyRate > 0 ? hourlyRate : DEFAULT_HOURLY_RATE,
     serviceTypes,
     defaultServiceType: serviceTypes.includes(defaultServiceType) ? defaultServiceType : serviceTypes[0],
     featuredRoutes,
-    adminEmails
+    adminEmails,
+    driverEmails
   };
 };
 
@@ -1303,6 +1518,27 @@ const createStripeCheckoutSession = async (env, params) => {
   };
 };
 
+const fetchStripeCheckoutSession = async (env, sessionId) => {
+  if (!env.STRIPE_SECRET_KEY) {
+    return { ok: false, error: 'Stripe is not configured yet.' };
+  }
+  const cleanId = String(sessionId || '').trim();
+  if (!cleanId) {
+    return { ok: false, error: 'Missing Stripe session id.' };
+  }
+
+  const response = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(cleanId)}`, {
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`
+    }
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    return { ok: false, error: data?.error?.message || data?.message || 'Unable to load Stripe session.' };
+  }
+  return { ok: true, session: data };
+};
+
 const parseStopsText = (stops) => {
   const formatStop = (stop, index) => {
     if (!stop) return '';
@@ -1553,10 +1789,6 @@ const storeInboundEmail = async (env, emailRecord) => {
 };
 
 const sendInboxReply = async (env, emailRow, replyBody) => {
-  if (!env.RESEND_API_KEY) {
-    return { ok: false, error: 'Resend API key is not configured.' };
-  }
-
   const to = String(emailRow?.from_email || '').trim();
   if (!to) {
     return { ok: false, error: 'Sender email is missing.' };
@@ -1565,31 +1797,20 @@ const sendInboxReply = async (env, emailRow, replyBody) => {
   const subjectBase = String(emailRow?.subject || '').trim() || 'Luxtravco message';
   const subject = /^re:/i.test(subjectBase) ? subjectBase : `Re: ${subjectBase}`;
 
-  try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'luxtravco-booking/1.0'
-      },
-      body: JSON.stringify({
-        from: 'Luxtravco <info@luxtravco.com>',
-        to,
-        subject,
-        text: replyBody,
-        html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#111;white-space:pre-wrap;">${escapeHtml(replyBody)}</div>`,
-        headers: emailRow?.message_id ? { 'In-Reply-To': emailRow.message_id, References: emailRow.message_id } : undefined
-      })
-    });
-    const result = await response.json().catch(() => null);
-    if (!response.ok) {
-      return { ok: false, error: result?.message || 'Failed to send inbox reply.' };
-    }
-    return { ok: true, result };
-  } catch (error) {
-    return { ok: false, error: error?.message || 'Failed to send inbox reply.' };
-  }
+  return sendLuxEmail(env, {
+    to,
+    subject,
+    text: replyBody,
+    headers: emailRow?.message_id ? { 'In-Reply-To': emailRow.message_id, References: emailRow.message_id } : undefined,
+    html: luxEmailShell({
+      eyebrow: 'SUPPORT',
+      title: 'Message from Luxtravco',
+      intro: 'Our team replied to your message.',
+      body: `
+        <div style="white-space:pre-wrap;margin:0;padding:16px;border:1px solid #2b2419;border-radius:16px;background:#151311;color:#f7f2e8;font-size:15px;line-height:1.7;">${escapeHtml(replyBody)}</div>
+      `
+    })
+  });
 };
 
 const renderInboxPage = (rows, selectedEmail, statusMessage = '') => {
@@ -2456,21 +2677,29 @@ const getAllowedAdminEmails = async (env) => {
   const { results } = await env.DB.prepare(
     'SELECT email FROM admin_users WHERE is_active = 1 ORDER BY email ASC'
   ).all();
-  const emails = (results || [])
+  const tableEmails = (results || [])
     .map((row) => String(row.email || '').trim().toLowerCase())
     .filter(Boolean);
-  if (emails.length) {
-    return new Set(emails);
-  }
   const pricing = await getPricingSettings(env);
-  return new Set(pricing.adminEmails);
+  return new Set([
+    ...normalizeAdminEmails(DEFAULT_ADMIN_EMAILS),
+    ...normalizeAdminEmails(env.ADMIN_EMAILS || ''),
+    ...normalizeAdminEmails(pricing.adminEmails || []),
+    ...tableEmails
+  ]);
+};
+
+const getAllowedDriverEmails = async (env) => {
+  const pricing = await getPricingSettings(env);
+  const adminsCanDrive = normalizeAdminEmails(env.ADMIN_EMAILS || DEFAULT_ADMIN_EMAILS);
+  return new Set([
+    ...normalizeAdminEmails(env.DRIVER_EMAILS || ''),
+    ...normalizeAdminEmails(pricing.driverEmails || []),
+    ...adminsCanDrive
+  ]);
 };
 
 const sendBookingReminderEmail = async (env, booking, reminderType) => {
-  if (!env.RESEND_API_KEY) {
-    return { ok: false, error: 'Resend API key is not configured.' };
-  }
-
   const to = String(booking.customer_email || '').trim();
   if (!to) {
     return { ok: false, error: 'Customer email is missing.' };
@@ -2505,42 +2734,24 @@ const sendBookingReminderEmail = async (env, booking, reminderType) => {
     'Luxtravco'
   ];
 
-  try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'luxtravco-booking/1.0'
-      },
-      body: JSON.stringify({
-        from: 'Luxtravco <info@luxtravco.com>',
-        to,
-        subject,
-        text: lines.join('\n'),
-        html: `
-          <div style="font-family:Arial,sans-serif;line-height:1.6;color:#111">
-            <h2 style="margin:0 0 12px">${escapeHtml(subject)}</h2>
-            <p>Hello ${escapeHtml(booking.full_name || 'there')},</p>
-            <p>${escapeHtml(intro)}</p>
-            <ul>
-              <li><strong>Pickup date:</strong> ${escapeHtml(pickupDate)}</li>
-              <li><strong>Pickup time:</strong> ${escapeHtml(pickupTime)}</li>
-              <li><strong>Route:</strong> ${escapeHtml(route)}</li>
-            </ul>
-            <p>If anything changes, reply to this email or contact info@luxtravco.com.</p>
-          </div>
-        `
-      })
-    });
-    const result = await response.json().catch(() => null);
-    if (!response.ok) {
-      return { ok: false, error: result?.message || 'Failed to send reminder email.' };
-    }
-    return { ok: true, result };
-  } catch (error) {
-    return { ok: false, error: error?.message || 'Failed to send reminder email.' };
-  }
+  return sendLuxEmail(env, {
+    to,
+    subject,
+    text: lines.join('\n'),
+    html: luxEmailShell({
+      eyebrow: 'TRIP REMINDER',
+      title: subject,
+      intro,
+      body: `
+        <p style="margin:0 0 12px;color:#f7f2e8;">Hello ${escapeHtml(booking.full_name || 'there')},</p>
+        ${luxInfoGrid([
+          ['Pickup date', pickupDate],
+          ['Pickup time', pickupTime],
+          ['Route', route]
+        ])}
+      `
+    })
+  });
 };
 
 const scheduleBookingReminders = async (env, booking) => {
@@ -2628,7 +2839,82 @@ const verifyStripeWebhookSignature = async (bodyText, signatureHeader, secret) =
   return signatures.includes(expected);
 };
 
-const handleStripeWebhook = async (request, env, origin) => {
+const finalizePaidBooking = async (env, booking, session = {}, ctx = null) => {
+  const paidAt = new Date().toISOString();
+  const sessionCustomerEmail = String(
+    session?.customer_details?.email || session?.customer_email || ''
+  ).trim();
+  await ensureBookingColumns(env);
+  await env.DB.prepare(
+    `UPDATE bookings
+     SET payment_status = ?,
+         paid_at = COALESCE(paid_at, ?),
+         customer_email = COALESCE(NULLIF(customer_email, ''), ?)
+     WHERE id = ?`
+  )
+    .bind('paid', paidAt, sessionCustomerEmail, booking.id)
+    .run();
+
+  const paidBooking = await env.DB.prepare('SELECT * FROM bookings WHERE id = ? LIMIT 1')
+    .bind(booking.id)
+    .first();
+  const emailBooking = {
+    ...booking,
+    ...(paidBooking || {}),
+    payment_status: 'paid',
+    paid_at: paidBooking?.paid_at || paidAt,
+    customer_email: paidBooking?.customer_email || booking.customer_email || sessionCustomerEmail
+  };
+
+  await scheduleBookingReminders(env, emailBooking);
+
+  if (!paidBooking?.payment_receipt_sent_at) {
+    const receipt = await sendPaymentReceivedCustomerEmail(env, emailBooking);
+    if (!receipt.ok) {
+      return { ok: false, error: receipt.error || 'Customer payment receipt email failed' };
+    }
+    await env.DB.prepare(
+      `UPDATE bookings
+       SET payment_receipt_sent_at = ?
+       WHERE id = ?`
+    )
+      .bind(new Date().toISOString(), booking.id)
+      .run();
+  }
+
+  if (ctx) {
+    const paidTotalCents = Number(emailBooking.estimated_total_cents || 0);
+    ctx.waitUntil(
+      sendAdminPushNotification(env, {
+        title: 'Payment received',
+        body: `#${booking.id} ${emailBooking.full_name || 'Customer'} paid $${(paidTotalCents / 100).toFixed(2)}`,
+        kind: 'payment',
+        data: {
+          booking_id: booking.id,
+          payment_status: 'paid'
+        }
+      })
+    );
+  }
+
+  if (!paidBooking?.paid_notification_sent_at) {
+    const notification = await sendPaidBookingNotificationEmail(env, emailBooking);
+    if (!notification.ok) {
+      return { ok: false, error: notification.error || 'Paid booking notification email failed' };
+    }
+    await env.DB.prepare(
+      `UPDATE bookings
+       SET paid_notification_sent_at = ?
+       WHERE id = ?`
+    )
+      .bind(new Date().toISOString(), booking.id)
+      .run();
+  }
+
+  return { ok: true, booking: emailBooking };
+};
+
+const handleStripeWebhook = async (request, env, origin, ctx) => {
   if (request.method !== 'POST') {
     return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
   }
@@ -2665,38 +2951,9 @@ const handleStripeWebhook = async (request, env, origin) => {
   }
 
   if (eventType === 'checkout.session.completed') {
-    const paidAt = new Date().toISOString();
-    await env.DB.prepare(
-      `UPDATE bookings
-       SET payment_status = ?, paid_at = ?
-       WHERE id = ?`
-    )
-      .bind('paid', paidAt, booking.id)
-      .run();
-    const paidBooking = await env.DB.prepare('SELECT * FROM bookings WHERE id = ? LIMIT 1')
-      .bind(booking.id)
-      .first();
-    await scheduleBookingReminders(env, paidBooking || { ...booking, payment_status: 'paid', paid_at: paidAt });
-    if (!paidBooking?.paid_notification_sent_at) {
-      const notification = await sendPaidBookingNotificationEmail(
-        env,
-        paidBooking || { ...booking, payment_status: 'paid', paid_at: paidAt }
-      );
-      if (notification.ok) {
-        await env.DB.prepare(
-          `UPDATE bookings
-           SET paid_notification_sent_at = ?
-           WHERE id = ?`
-        )
-          .bind(new Date().toISOString(), booking.id)
-          .run();
-      } else {
-        return jsonResponse(
-          { ok: false, error: notification.error || 'Paid booking notification email failed' },
-          500,
-          origin
-        );
-      }
+    const finalized = await finalizePaidBooking(env, booking, session, ctx);
+    if (!finalized.ok) {
+      return jsonResponse({ ok: false, error: finalized.error }, 500, origin);
     }
   } else if (eventType === 'checkout.session.expired') {
     await env.DB.prepare(
@@ -2709,6 +2966,54 @@ const handleStripeWebhook = async (request, env, origin) => {
   }
 
   return jsonResponse({ ok: true }, 200, origin);
+};
+
+const handleStripeSuccessReturn = async (request, env, origin, ctx) => {
+  if (request.method !== 'GET') {
+    return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+  }
+
+  await ensureBookingColumns(env);
+  const url = new URL(request.url);
+  const bookingId = Number.parseInt(String(url.searchParams.get('booking_id') || ''), 10);
+  const sessionId = String(url.searchParams.get('session_id') || '').trim();
+  const siteUrl = env.SITE_URL || 'https://luxtravco.com';
+
+  const redirect = (status, extra = '') =>
+    Response.redirect(
+      `${siteUrl}/?payment=${encodeURIComponent(status)}${Number.isFinite(bookingId) ? `&booking_id=${bookingId}` : ''}${extra}`,
+      302
+    );
+
+  if (!Number.isFinite(bookingId) || bookingId <= 0 || !sessionId) {
+    return redirect('error');
+  }
+
+  const booking = await env.DB.prepare('SELECT * FROM bookings WHERE id = ? LIMIT 1')
+    .bind(bookingId)
+    .first();
+  if (!booking || String(booking.stripe_session_id || '') !== sessionId) {
+    return redirect('error');
+  }
+
+  const loaded = await fetchStripeCheckoutSession(env, sessionId);
+  if (!loaded.ok) {
+    return redirect('error');
+  }
+
+  const session = loaded.session || {};
+  const paid = String(session.payment_status || '').toLowerCase() === 'paid' ||
+    String(session.status || '').toLowerCase() === 'complete';
+  if (!paid) {
+    return redirect('pending');
+  }
+
+  const finalized = await finalizePaidBooking(env, booking, session, ctx);
+  if (!finalized.ok) {
+    return redirect('email_error', `&message=${encodeURIComponent(finalized.error || '')}`);
+  }
+
+  return redirect('success', '&confirmed=1');
 };
 
 const humanizeStatus = (value) => {
@@ -2782,6 +3087,22 @@ const serializeCustomerCard = (customer, index) => ({
   trips: Number(customer.bookings_count || 0)
 });
 
+const serializeSupportCase = (row) => ({
+  id: Number(row.id || 0),
+  booking_id: row.booking_id ? Number(row.booking_id) : null,
+  customer_name: row.customer_name || '',
+  customer_email: row.customer_email || '',
+  customer_phone: row.customer_phone || '',
+  issue_type: row.issue_type || 'General support',
+  priority: row.priority || 'Normal',
+  status: row.status || 'open',
+  details: row.details || '',
+  resolution: row.resolution || '',
+  created_at: row.created_at || '',
+  updated_at: row.updated_at || '',
+  resolved_at: row.resolved_at || ''
+});
+
 const requireAdminApiAuth = async (request, env, origin) => {
   const authHeader = request.headers.get('Authorization') || '';
   const token = authHeader.startsWith('Bearer ')
@@ -2797,9 +3118,39 @@ const requireAdminApiAuth = async (request, env, origin) => {
       return { response: jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin) };
     }
     const email = String(payload.email || '').trim().toLowerCase();
-    const allowedEmails = await getAllowedAdminEmails(env);
-    if (!email || !allowedEmails.has(email)) {
+    if (!email) {
       return { response: jsonResponse({ ok: false, error: 'Admin access denied' }, 403, origin) };
+    }
+    return { payload, email };
+  } catch (error) {
+    return {
+      response: jsonResponse(
+        { ok: false, error: error?.message || 'Unable to verify access token' },
+        500,
+        origin
+      )
+    };
+  }
+};
+
+const requireDriverApiAuth = async (request, env, origin) => {
+  const authHeader = request.headers.get('Authorization') || '';
+  const token = authHeader.startsWith('Bearer ')
+    ? authHeader.replace('Bearer ', '').trim()
+    : '';
+  if (!token) {
+    return { response: jsonResponse({ ok: false, error: 'Missing access token' }, 401, origin) };
+  }
+
+  try {
+    const payload = await verifySupabaseAccessToken(token);
+    if (!payload) {
+      return { response: jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin) };
+    }
+    const email = String(payload.email || '').trim().toLowerCase();
+    const allowed = await getAllowedDriverEmails(env);
+    if (!email || !allowed.has(email)) {
+      return { response: jsonResponse({ ok: false, error: 'Driver access denied' }, 403, origin) };
     }
     return { payload, email };
   } catch (error) {
@@ -2815,6 +3166,7 @@ const requireAdminApiAuth = async (request, env, origin) => {
 
 const renderAdminPage = (rows, pricing = {}) => {
   const adminEmailsValue = Array.isArray(pricing.adminEmails) ? pricing.adminEmails.join(', ') : DEFAULT_ADMIN_EMAILS;
+  const driverEmailsValue = Array.isArray(pricing.driverEmails) ? pricing.driverEmails.join(', ') : '';
   const hourlyRate = Number.isFinite(Number(pricing.hourlyRate))
     ? Number(pricing.hourlyRate)
     : DEFAULT_HOURLY_RATE;
@@ -3005,6 +3357,21 @@ const renderAdminPage = (rows, pricing = {}) => {
       <button class="danger" type="submit">Save Admin Emails</button>
       <span class="warning" id="admin-emails-status">Current admin email allowlist is editable here.</span>
     </form>
+    <form class="pricing-panel" id="driver-accounts-form">
+      <div class="pricing-header">
+        <h2>Driver Accounts</h2>
+        <span class="subtle">These emails can sign in to the driver app only. Create the user in Supabase Auth first.</span>
+      </div>
+      <div class="pricing-grid">
+        <div class="pricing-card" style="grid-column: 1 / -1;">
+          <strong>Driver Emails</strong>
+          <span>Separate addresses with commas or new lines.</span>
+          <textarea name="driver_emails" rows="4" style="width:100%; padding:11px 12px; border-radius:10px; border:1px solid rgba(240,178,71,0.24); background:rgba(0,0,0,0.42); color:#f7f5f2; font-size:0.95rem; resize:vertical;">${escapeHtml(driverEmailsValue)}</textarea>
+        </div>
+      </div>
+      <button class="danger" type="submit">Save Driver Accounts</button>
+      <span class="warning" id="driver-accounts-status">Current driver allowlist is editable here.</span>
+    </form>
     <table>
       <thead>
         <tr>
@@ -3132,6 +3499,18 @@ const renderAdminPage = (rows, pricing = {}) => {
       });
     }
 
+    const driverAccountsForm = document.getElementById('driver-accounts-form');
+    const driverAccountsStatus = document.getElementById('driver-accounts-status');
+    if (driverAccountsForm) {
+      driverAccountsForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const formData = new FormData(driverAccountsForm);
+        const query = new URLSearchParams({ driver_emails: formData.get('driver_emails') || '' });
+        if (driverAccountsStatus) driverAccountsStatus.textContent = 'Saving...';
+        window.location.href = '/admin/driver-accounts?' + query.toString();
+      });
+    }
+
     document.querySelectorAll('[data-price-form]').forEach((form) => {
       form.addEventListener('submit', (event) => {
         event.preventDefault();
@@ -3202,6 +3581,7 @@ export default {
       url.pathname === '/admin/export' ||
       url.pathname === '/admin/pricing' ||
       url.pathname === '/admin/admin-emails' ||
+      url.pathname === '/admin/driver-accounts' ||
       url.pathname === '/admin/booking-price' ||
       url.pathname === '/admin/approve' ||
       url.pathname === '/admin/reject' ||
@@ -3366,6 +3746,37 @@ export default {
             `Refund eligibility: ${policy.refundPercent}%`
           ].join('\n')
         );
+        if (ctx) {
+          ctx.waitUntil(
+            sendBookingCancelledEmails(env, {
+              ...booking,
+              payment_status: 'cancelled',
+              cancelled_at: cancelledAt,
+              cancellation_refund_percent: policy.refundPercent
+            }, policy)
+          );
+        } else {
+          await sendBookingCancelledEmails(env, {
+            ...booking,
+            payment_status: 'cancelled',
+            cancelled_at: cancelledAt,
+            cancellation_refund_percent: policy.refundPercent
+          }, policy);
+        }
+        if (ctx) {
+          ctx.waitUntil(
+            sendAdminPushNotification(env, {
+              title: 'Booking cancelled',
+              body: `#${bookingId} ${booking.full_name || 'Customer'} • ${policy.refundPercent}% refund eligible`,
+              kind: 'booking_cancelled',
+              data: {
+                booking_id: bookingId,
+                refund_percent: policy.refundPercent,
+                payment_status: 'cancelled'
+              }
+            })
+          );
+        }
 
         return jsonResponse(
           {
@@ -3485,6 +3896,19 @@ export default {
             `Details: ${details}`
           ].join('\n')
         );
+        if (ctx) {
+          ctx.waitUntil(
+            sendAdminPushNotification(env, {
+              title: 'New support ticket',
+              body: `#${caseId || 'new'} ${issueType} • ${payload?.customer_name || booking?.full_name || email || 'Customer'}`,
+              kind: 'support_ticket',
+              data: {
+                case_id: caseId,
+                booking_id: booking ? booking.id : null
+              }
+            })
+          );
+        }
 
         return jsonResponse({ ok: true, id: caseId }, 200, origin);
       } catch (error) {
@@ -3710,6 +4134,19 @@ export default {
           `Details: ${details}`
         ].join('\n')
       );
+      if (ctx) {
+        ctx.waitUntil(
+          sendAdminPushNotification(env, {
+            title: 'New support case',
+            body: `#${caseId || 'new'} ${issueType} • ${customerName || booking?.full_name || 'Customer'}`,
+            kind: 'support_case',
+            data: {
+              case_id: caseId || null,
+              booking_id: booking ? booking.id : null
+            }
+          })
+        );
+      }
 
       return Response.redirect(
         new URL(`/admin/support/case?id=${encodeURIComponent(caseId || '')}&status=Support%20case%20created`, request.url).toString(),
@@ -3764,6 +4201,16 @@ export default {
       )
         .bind('resolved', resolution, now, now, caseId)
         .run();
+      if (ctx) {
+        ctx.waitUntil(
+          sendAdminPushNotification(env, {
+            title: 'Support case resolved',
+            body: `Case #${caseId} was marked resolved`,
+            kind: 'support_resolved',
+            data: { case_id: caseId }
+          })
+        );
+      }
 
       return Response.redirect(new URL(`/admin/support/case?id=${caseId}&status=Case%20resolved`, request.url).toString(), 302);
     }
@@ -3771,6 +4218,64 @@ export default {
     if (url.pathname.startsWith('/api/admin/')) {
       const auth = await requireAdminApiAuth(request, env, origin);
       if (auth.response) return auth.response;
+    }
+
+    if (url.pathname.startsWith('/api/driver/')) {
+      const auth = await requireDriverApiAuth(request, env, origin);
+      if (auth.response) return auth.response;
+    }
+
+    if (url.pathname === '/api/driver/me') {
+      if (request.method !== 'GET') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      const auth = await requireDriverApiAuth(request, env, origin);
+      if (auth.response) return auth.response;
+      return jsonResponse({ ok: true, email: auth.email }, 200, origin);
+    }
+
+    if (url.pathname === '/api/driver/bookings') {
+      if (request.method !== 'GET') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      await ensureBookingColumns(env);
+      const { results } = await env.DB.prepare(
+        `SELECT * FROM bookings
+         WHERE LOWER(COALESCE(payment_status, '')) IN ('paid', 'approved_email_sent')
+           AND LOWER(COALESCE(driver_status, '')) != 'completed'
+         ORDER BY pickup_date ASC, pickup_time ASC, created_at DESC
+         LIMIT 300`
+      ).all();
+      return jsonResponse({ ok: true, bookings: (results || []).map(serializeAdminBooking) }, 200, origin);
+    }
+
+    if (url.pathname === '/api/driver/bookings/status') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+
+      const id = Number.parseInt(String(payload?.id || ''), 10);
+      const status = String(payload?.status || '').trim().toLowerCase().replace(/\s+/g, '_');
+      const allowedStatuses = new Set(['assigned', 'on_the_way', 'arrived', 'picked_up', 'completed', '']);
+      if (!Number.isFinite(id) || id <= 0) {
+        return jsonResponse({ ok: false, error: 'Invalid booking id' }, 400, origin);
+      }
+      if (!allowedStatuses.has(status)) {
+        return jsonResponse({ ok: false, error: 'Invalid driver status' }, 400, origin);
+      }
+
+      await ensureBookingColumns(env);
+      await env.DB.prepare('UPDATE bookings SET driver_status = ? WHERE id = ?').bind(status, id).run();
+      const booking = await env.DB.prepare('SELECT * FROM bookings WHERE id = ? LIMIT 1').bind(id).first();
+      return jsonResponse({ ok: true, booking: booking ? serializeAdminBooking(booking) : null }, 200, origin);
     }
 
     if (url.pathname === '/api/admin/dashboard') {
@@ -4045,6 +4550,313 @@ export default {
       return jsonResponse({ ok: true, customers }, 200, origin);
     }
 
+    if (url.pathname === '/api/admin/support') {
+      if (request.method !== 'GET') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      await ensureSupportTables(env);
+      await ensureBookingColumns(env);
+      const [caseResult, bookingResult] = await Promise.all([
+        env.DB.prepare(
+          `SELECT * FROM support_cases
+           ORDER BY CASE WHEN status = 'resolved' THEN 1 ELSE 0 END, updated_at DESC, id DESC
+           LIMIT 200`
+        ).all(),
+        env.DB.prepare('SELECT * FROM bookings ORDER BY created_at DESC, id DESC LIMIT 250').all()
+      ]);
+      return jsonResponse(
+        {
+          ok: true,
+          cases: (caseResult.results || []).map(serializeSupportCase),
+          bookings: (bookingResult.results || []).map(serializeAdminBooking)
+        },
+        200,
+        origin
+      );
+    }
+
+    if (url.pathname === '/api/admin/support/create') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+
+      const bookingId = Number.parseInt(String(payload?.booking_id || ''), 10);
+      const details = String(payload?.details || '').trim();
+      if (!details) {
+        return jsonResponse({ ok: false, error: 'Add support details first' }, 400, origin);
+      }
+
+      await ensureSupportTables(env);
+      await ensureBookingColumns(env);
+      let booking = null;
+      if (Number.isFinite(bookingId) && bookingId > 0) {
+        booking = await env.DB.prepare('SELECT * FROM bookings WHERE id = ? LIMIT 1').bind(bookingId).first();
+      }
+
+      const now = new Date().toISOString();
+      const insert = await env.DB.prepare(
+        `INSERT INTO support_cases (
+          booking_id,
+          customer_name,
+          customer_email,
+          customer_phone,
+          issue_type,
+          priority,
+          status,
+          details,
+          resolution,
+          created_at,
+          updated_at,
+          resolved_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          booking ? booking.id : null,
+          String(payload?.customer_name || booking?.full_name || '').trim(),
+          String(payload?.customer_email || booking?.customer_email || '').trim(),
+          String(payload?.customer_phone || booking?.contact_number || '').trim(),
+          String(payload?.issue_type || 'General support').trim() || 'General support',
+          String(payload?.priority || 'Normal').trim() || 'Normal',
+          'open',
+          details,
+          '',
+          now,
+          now,
+          ''
+        )
+        .run();
+
+      const caseId = insert?.meta?.last_row_id || null;
+      const supportCase = caseId
+        ? await env.DB.prepare('SELECT * FROM support_cases WHERE id = ? LIMIT 1').bind(caseId).first()
+        : null;
+      if (ctx) {
+        ctx.waitUntil(
+          sendAdminPushNotification(env, {
+            title: 'New support case',
+            body: `#${caseId || 'new'} ${supportCase?.issue_type || 'General support'} • ${supportCase?.customer_name || 'Customer'}`,
+            kind: 'support_case',
+            data: {
+              case_id: caseId,
+              booking_id: supportCase?.booking_id || null
+            }
+          })
+        );
+      }
+      return jsonResponse(
+        { ok: true, case: supportCase ? serializeSupportCase(supportCase) : null },
+        200,
+        origin
+      );
+    }
+
+    if (url.pathname === '/api/admin/support/resolve') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+      const caseId = Number.parseInt(String(payload?.id || ''), 10);
+      const resolution = String(payload?.resolution || '').trim();
+      if (!Number.isFinite(caseId) || caseId <= 0) {
+        return jsonResponse({ ok: false, error: 'Invalid support case id' }, 400, origin);
+      }
+      if (!resolution) {
+        return jsonResponse({ ok: false, error: 'Add a resolution first' }, 400, origin);
+      }
+
+      await ensureSupportTables(env);
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        `UPDATE support_cases
+         SET status = ?,
+             resolution = ?,
+             resolved_at = ?,
+             updated_at = ?
+         WHERE id = ?`
+      )
+        .bind('resolved', resolution, now, now, caseId)
+        .run();
+      const supportCase = await env.DB.prepare('SELECT * FROM support_cases WHERE id = ? LIMIT 1').bind(caseId).first();
+      if (ctx) {
+        ctx.waitUntil(
+          sendAdminPushNotification(env, {
+            title: 'Support case resolved',
+            body: `#${caseId} ${supportCase?.issue_type || 'Case'} was marked resolved`,
+            kind: 'support_resolved',
+            data: {
+              case_id: caseId,
+              booking_id: supportCase?.booking_id || null
+            }
+          })
+        );
+      }
+      return jsonResponse(
+        { ok: true, case: supportCase ? serializeSupportCase(supportCase) : null },
+        200,
+        origin
+      );
+    }
+
+    if (url.pathname === '/api/admin/pricing') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+
+      const hourlyRate = Number.parseFloat(payload?.hourly_rate);
+      const serviceTypes = normalizeServiceTypes(payload?.service_types || '');
+      const defaultServiceType = String(payload?.default_service_type || serviceTypes[0] || DEFAULT_SERVICE_TYPE).trim();
+      const requestedRouteCount = Number.parseInt(payload?.route_count || `${DEFAULT_FEATURED_ROUTES.length}`, 10);
+      const routeCount = Number.isFinite(requestedRouteCount) && requestedRouteCount > 0
+        ? requestedRouteCount
+        : DEFAULT_FEATURED_ROUTES.length;
+      const featuredRoutes = Array.from({ length: routeCount }, (_, index) => {
+        const route = DEFAULT_FEATURED_ROUTES[index] || {
+          key: routeKeyForIndex(index),
+          label: `Route ${index + 1}`,
+          price: DEFAULT_ROUTE_PRICE
+        };
+        return {
+          key: route.key,
+          label: String(payload?.[`${route.key}_label`] || '').trim(),
+          price: Number.parseFloat(payload?.[`${route.key}_price`])
+        };
+      });
+
+      if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
+        return jsonResponse({ ok: false, error: 'Invalid hourly rate' }, 400, origin);
+      }
+      if (!serviceTypes.length) {
+        return jsonResponse({ ok: false, error: 'Add at least one vehicle option' }, 400, origin);
+      }
+      if (!serviceTypes.includes(defaultServiceType)) {
+        return jsonResponse({ ok: false, error: 'Default vehicle must match one of the vehicle options' }, 400, origin);
+      }
+      if (featuredRoutes.some((route) => !route.label || !Number.isFinite(route.price) || route.price <= 0)) {
+        return jsonResponse({ ok: false, error: 'Every route needs a label and price' }, 400, origin);
+      }
+
+      await setPricingSetting(env, 'hourly_rate', hourlyRate.toFixed(2));
+      await setPricingSetting(env, 'service_types', JSON.stringify(serviceTypes));
+      await setPricingSetting(env, 'default_service_type', defaultServiceType);
+      await setPricingSetting(env, 'route_count', String(featuredRoutes.length));
+      for (const route of featuredRoutes) {
+        await setPricingSetting(env, `${route.key}_label`, route.label);
+        await setPricingSetting(env, `${route.key}_price`, route.price.toFixed(2));
+      }
+      const pricing = await getPricingSettings(env);
+      return jsonResponse(
+        {
+          ok: true,
+          pricing: {
+            hourly_rate: hourlyRate,
+            service_types: serviceTypes,
+            default_service_type: defaultServiceType,
+            featured_routes: featuredRoutes,
+            admin_emails: pricing.adminEmails
+          }
+        },
+        200,
+        origin
+      );
+    }
+
+    if (url.pathname === '/api/admin/admin-emails') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+      const normalized = normalizeAdminEmails(payload?.admin_emails || '');
+      if (!normalized.length) {
+        return jsonResponse({ ok: false, error: 'Add at least one valid admin email' }, 400, origin);
+      }
+      await setPricingSetting(env, 'admin_emails', normalized.join(','));
+      await syncAdminUsersFromEmails(env, normalized);
+      return jsonResponse({ ok: true, admin_emails: normalized }, 200, origin);
+    }
+
+    if (url.pathname === '/api/admin/driver-accounts') {
+      if (request.method === 'GET') {
+        const pricing = await getPricingSettings(env);
+        return jsonResponse({ ok: true, driver_emails: pricing.driverEmails }, 200, origin);
+      }
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+      const normalized = normalizeAdminEmails(payload?.driver_emails || '');
+      await setPricingSetting(env, 'driver_emails', normalized.join(','));
+      return jsonResponse({ ok: true, driver_emails: normalized }, 200, origin);
+    }
+
+    if (url.pathname === '/api/admin/bookings/price') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+      const id = Number.parseInt(String(payload?.id || ''), 10);
+      const dollars = Number.parseFloat(String(payload?.amount || ''));
+      if (!Number.isFinite(id) || id <= 0) {
+        return jsonResponse({ ok: false, error: 'Invalid booking id' }, 400, origin);
+      }
+      if (!Number.isFinite(dollars) || dollars <= 0) {
+        return jsonResponse({ ok: false, error: 'Invalid booking amount' }, 400, origin);
+      }
+      await env.DB.prepare('UPDATE bookings SET estimated_total_cents = ? WHERE id = ?')
+        .bind(Math.round(dollars * 100), id)
+        .run();
+      const booking = await env.DB.prepare('SELECT * FROM bookings WHERE id = ? LIMIT 1').bind(id).first();
+      return jsonResponse({ ok: true, booking: booking ? serializeAdminBooking(booking) : null }, 200, origin);
+    }
+
+    if (url.pathname === '/api/admin/clear') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+      if (payload?.confirm !== true) {
+        return jsonResponse({ ok: false, error: 'Missing confirmation' }, 400, origin);
+      }
+      await env.DB.prepare('DELETE FROM bookings').run();
+      return jsonResponse({ ok: true }, 200, origin);
+    }
+
     if (url.pathname === '/admin/export') {
       const { results } = await env.DB.prepare(
         'SELECT * FROM bookings ORDER BY id DESC'
@@ -4180,7 +4992,8 @@ export default {
             hourly_rate: pricing.hourlyRate,
             service_types: pricing.serviceTypes,
             default_service_type: pricing.defaultServiceType,
-            featured_routes: pricing.featuredRoutes
+            featured_routes: pricing.featuredRoutes,
+            admin_emails: pricing.adminEmails
           }
         },
         200,
@@ -4344,6 +5157,30 @@ export default {
       }
 
       return jsonResponse({ ok: true, admin_emails: normalized }, 200, origin);
+    }
+
+    if (url.pathname === '/admin/driver-accounts') {
+      if (request.method !== 'POST' && request.method !== 'GET') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      let payload = Object.fromEntries(url.searchParams.entries());
+      if (request.method === 'POST') {
+        try {
+          payload = await request.json();
+        } catch (error) {
+          return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+        }
+      }
+
+      const normalized = normalizeAdminEmails(payload?.driver_emails || '');
+      await setPricingSetting(env, 'driver_emails', normalized.join(','));
+
+      if (request.method === 'GET') {
+        return Response.redirect(new URL('/admin', request.url).toString(), 302);
+      }
+
+      return jsonResponse({ ok: true, driver_emails: normalized }, 200, origin);
     }
 
     if (url.pathname === '/admin/booking-price') {
@@ -4567,8 +5404,17 @@ export default {
       return jsonResponse({ ok: true }, 200, origin);
     }
 
-    if (url.pathname === '/webhooks/stripe') {
-      return handleStripeWebhook(request, env, origin);
+    if (
+      url.pathname === '/webhooks/stripe' ||
+      url.pathname === '/webhook/stripe' ||
+      url.pathname === '/stripe/webhook' ||
+      url.pathname === '/stripe-webhook'
+    ) {
+      return handleStripeWebhook(request, env, origin, ctx);
+    }
+
+    if (url.pathname === '/payment/success') {
+      return handleStripeSuccessReturn(request, env, origin, ctx);
     }
 
     if (request.method !== 'POST') {
@@ -4665,6 +5511,8 @@ export default {
       return jsonResponse({ ok: false, error: 'Invalid route estimate' }, 400, origin);
     }
 
+    const resolvedCustomerEmail = String(customer_email || authenticatedCustomer?.email || '').trim();
+    const resolvedCustomerUserId = String(customer_user_id || authenticatedCustomer?.sub || authenticatedCustomer?.user_id || '').trim();
     const createdAt = new Date().toISOString();
 
     try {
@@ -4708,8 +5556,8 @@ export default {
           'pending_review',
           '',
           '',
-          customer_email || '',
-          customer_user_id || '',
+          resolvedCustomerEmail,
+          resolvedCustomerUserId,
           travelers || '',
           kids || '',
           bags || '',
@@ -4720,8 +5568,8 @@ export default {
 
       await ensureCustomerProfile(env, {
         full_name: full_name || '',
-        customer_email: customer_email || '',
-        customer_user_id: customer_user_id || '',
+        customer_email: resolvedCustomerEmail,
+        customer_user_id: resolvedCustomerUserId,
         contact_number: contact_number || '',
         created_at: createdAt
       });
@@ -4753,6 +5601,31 @@ export default {
         .join('\n');
 
       await sendSlack(env, slackMessage);
+      if (ctx) {
+        ctx.waitUntil(
+          sendBookingMadeAdminEmail(env, {
+            id: insertResult?.meta?.last_row_id || '',
+            full_name: full_name || '',
+            customer_email: resolvedCustomerEmail,
+            customer_user_id: resolvedCustomerUserId,
+            contact_number: contact_number || '',
+            pickup_date,
+            pickup_time: pickup_time || '',
+            pickup_location,
+            dropoff_location,
+            stops: stops ? JSON.stringify(stops) : '',
+            booking_mode: mode,
+            service_type: normalizedServiceType,
+            estimated_hours: String(estimatedHours?.toFixed(2) || ''),
+            estimated_total_cents: totalCents,
+            travelers: travelers || '',
+            kids: kids || '',
+            bags: bags || '',
+            payment_status: paymentStatus,
+            created_at: createdAt
+          })
+        );
+      }
       if (ctx) {
         ctx.waitUntil(
           sendAdminPushNotification(env, {
