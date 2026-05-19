@@ -16,6 +16,10 @@ const passwordForm = document.getElementById('password-form');
 const dashboardPanel = document.getElementById('dashboard-panel');
 const dashboardList = document.getElementById('dashboard-list');
 const googleOAuthButton = document.getElementById('google-oauth');
+const appleOAuthButton = document.getElementById('apple-oauth');
+const profilePanel = document.getElementById('profile-panel');
+const profileForm = document.getElementById('profile-form');
+const profileSubmit = document.getElementById('profile-submit');
 const supportForm = document.getElementById('support-form');
 const supportBooking = document.getElementById('support-booking');
 const supportName = document.getElementById('support-name');
@@ -133,6 +137,7 @@ const getSupabaseClient = async () => {
 
 const updateButtonLabel = () => {
   authSubmit.textContent = mode === 'sign-in' ? 'Sign In' : 'Create Account';
+  if (authForm) authForm.dataset.mode = mode;
 };
 
 const formatAuthError = (error, fallback) => {
@@ -256,6 +261,37 @@ const renderSupportBookings = (bookings) => {
   }
 };
 
+const loadCustomerProfile = async (accessToken) => {
+  if (!accessToken) return null;
+  const response = await fetch(`${BOOKING_API_URL}/api/customer/profile`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data?.ok) {
+    throw new Error(data?.error || 'Unable to load customer details.');
+  }
+  return data.profile || null;
+};
+
+const fillProfileForm = (profile, session) => {
+  if (!profileForm) return;
+  const metadata = session?.user?.user_metadata || {};
+  const fullName = profile?.full_name || metadata.full_name || metadata.name || '';
+  const phone = profile?.phone || metadata.phone || '';
+  const nameInput = profileForm.querySelector('[name="full_name"]');
+  const phoneInput = profileForm.querySelector('[name="phone"]');
+  if (nameInput && !nameInput.value) nameInput.value = fullName;
+  if (phoneInput && !phoneInput.value) phoneInput.value = phone;
+};
+
+const syncCustomerProfilePanel = async (session) => {
+  if (!profilePanel || !session?.access_token) return null;
+  const profile = await loadCustomerProfile(session.access_token);
+  fillProfileForm(profile, session);
+  profilePanel.classList.toggle('hidden', !profile?.needs_phone);
+  return profile;
+};
+
 const fillSupportContactFromBooking = () => {
   const bookingId = Number.parseInt(String(supportBooking?.value || ''), 10);
   const booking = latestBookings.find((item) => Number(item.id) === bookingId);
@@ -302,10 +338,19 @@ const syncSession = async () => {
   if (session?.user?.email) {
     setAuthState('Signed in', `You are logged in as ${session.user.email}.`);
     setSupportState('Support ready', 'Choose a booking, add details, and send it to Luxtravco support.');
+    try {
+      const profile = await syncCustomerProfilePanel(session);
+      if (profile?.needs_phone) {
+        setAuthState('Phone number needed', 'Add your phone number below before submitting a booking.');
+      }
+    } catch (error) {
+      setAuthState('Profile sync issue', error?.message || 'Unable to load customer details.');
+    }
     await loadDashboard();
   } else {
     setAuthState('Signed out', 'No customer session is active.');
     setSupportState('Sign in required', 'Sign in first so we can connect the request to your account.');
+    profilePanel?.classList.add('hidden');
     dashboardPanel?.classList.add('hidden');
     renderSupportBookings([]);
   }
@@ -346,7 +391,10 @@ authForm.addEventListener('submit', async (event) => {
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/customer.html?reset=1`
+          emailRedirectTo: `${window.location.origin}/customer.html?reset=1`,
+          data: {
+            full_name: String(formData.get('full_name') || '').trim()
+          }
         }
       });
       if (error) throw error;
@@ -376,6 +424,53 @@ authForm.addEventListener('submit', async (event) => {
 });
 
 googleOAuthButton?.addEventListener('click', () => beginOAuth('google', googleOAuthButton));
+appleOAuthButton?.addEventListener('click', () => beginOAuth('apple', appleOAuthButton));
+
+profileForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const supabase = await getSupabaseClient();
+  if (!supabase) return;
+  const { data } = await supabase.auth.getSession();
+  const session = data?.session;
+  if (!session?.access_token) {
+    setAuthState('Sign in required', 'Sign in first, then save your phone number.');
+    return;
+  }
+
+  const formData = new FormData(profileForm);
+  const phone = String(formData.get('phone') || '').trim();
+  if (!phone) {
+    setAuthState('Phone required', 'Enter your phone number before booking.');
+    return;
+  }
+
+  profileSubmit.disabled = true;
+  profileSubmit.textContent = 'Saving...';
+  try {
+    const response = await fetch(`${BOOKING_API_URL}/api/customer/profile`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        full_name: String(formData.get('full_name') || '').trim(),
+        phone
+      })
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok || !result?.ok) {
+      throw new Error(result?.error || 'Unable to save customer details.');
+    }
+    profilePanel.classList.add('hidden');
+    setAuthState('Details saved', 'Your customer profile is ready for booking.');
+  } catch (error) {
+    setAuthState('Profile error', error?.message || 'Unable to save customer details.');
+  } finally {
+    profileSubmit.disabled = false;
+    profileSubmit.textContent = 'Save Details';
+  }
+});
 
 supportBooking?.addEventListener('change', fillSupportContactFromBooking);
 

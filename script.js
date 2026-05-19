@@ -30,7 +30,7 @@ let bookingMap;
 let bookingMarker;
 let bookingMode = 'transfer';
 let currentEstimateHours = null;
-let customerSession = { email: '', userId: '' };
+let customerSession = { email: '', userId: '', accessToken: '', profile: null, needsPhone: false };
 let bookingAuthReady = false;
 let estimateRequestId = 0;
 let estimateTimer = null;
@@ -128,14 +128,38 @@ const getCustomerContext = async () => {
   try {
     const { data } = await client.auth.getSession();
     const session = data?.session;
+    const accessToken = session?.access_token || '';
+    let profile = null;
+    let needsPhone = false;
+    if (accessToken) {
+      try {
+        profile = await loadCustomerProfile(accessToken);
+        needsPhone = Boolean(profile?.needs_phone);
+      } catch (error) {
+        needsPhone = true;
+      }
+    }
     return {
       email: session?.user?.email || '',
       userId: session?.user?.id || '',
-      accessToken: session?.access_token || ''
+      accessToken,
+      profile,
+      needsPhone
     };
   } catch (error) {
-    return { email: '', userId: '', accessToken: '' };
+    return { email: '', userId: '', accessToken: '', profile: null, needsPhone: false };
   }
+};
+
+const loadCustomerProfile = async (accessToken) => {
+  const response = await fetch(`${BOOKING_API_URL}/api/customer/profile`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data?.ok) {
+    throw new Error(data?.error || 'Unable to load customer profile.');
+  }
+  return data.profile || null;
 };
 
 const geocodeLocation = async (query, locationType = 'all') => {
@@ -224,6 +248,10 @@ const setBookingSubmissionState = (isSignedIn) => {
   if (!isSignedIn) {
     submitButton.disabled = true;
     submitButton.textContent = 'Sign In to Submit';
+    submitButton.dataset.locked = 'true';
+  } else if (customerSession.needsPhone) {
+    submitButton.disabled = true;
+    submitButton.textContent = 'Add Phone to Submit';
     submitButton.dataset.locked = 'true';
   } else {
     submitButton.disabled = false;
@@ -332,6 +360,13 @@ const refreshBookingAccess = async () => {
   customerSession = customerContext;
   bookingAuthReady = true;
   ensureBookingAuthNotice();
+  const notice = bookingForm.querySelector('.booking-auth-note');
+  if (notice && customerContext.needsPhone) {
+    notice.innerHTML = `
+      Add your phone number to your customer profile before submitting a request.
+      <a href="customer.html">Customer Details</a>
+    `;
+  }
   setBookingSubmissionState(Boolean(customerContext.email || customerContext.userId));
 };
 
@@ -877,6 +912,13 @@ const handleBookingSubmit = async (event) => {
     alert('Please sign in or create an account before submitting a request.');
     return;
   }
+  if (customerContext.needsPhone) {
+    ensureBookingAuthNotice();
+    setBookingSubmissionState(true);
+    alert('Please add your phone number to your customer details before submitting a request.');
+    window.location.href = 'customer.html';
+    return;
+  }
 
   const turnstileToken = customerContext.accessToken ? '' : await getBookingTurnstileToken();
   if (!customerContext.accessToken && !turnstileToken) {
@@ -905,6 +947,9 @@ const handleBookingSubmit = async (event) => {
     bags: bookingForm.querySelector('[name="bags"]')?.value.trim() || '',
     contact_number: bookingForm
       .querySelector('[name="contactNumber"]')
+      ?.value.trim() || '',
+    promo_code: bookingForm
+      .querySelector('[name="promoCode"]')
       ?.value.trim() || '',
     stops: Array.from(bookingForm.querySelectorAll('.roundtrip-leg')).map((leg, index) => {
       const pickup = leg.querySelector(`[name="roundTripPickup${index}"]`);

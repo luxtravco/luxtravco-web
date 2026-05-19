@@ -242,13 +242,20 @@ const bookingDetailsLines = (booking) => [
   `Service type: ${booking.service_type || '—'}`,
   `Booking mode: ${booking.booking_mode || '—'}`,
   `Estimated hours: ${booking.estimated_hours || '—'}`,
+  booking.promo_code ? `Promo code: ${booking.promo_code}` : null,
+  Number(booking.promo_discount_cents || 0) > 0
+    ? `Promo discount: -${formatCurrency(booking.promo_discount_cents || 0)}`
+    : null,
+  Number(booking.original_total_cents || 0) > 0
+    ? `Original total: ${formatCurrency(booking.original_total_cents || 0)}`
+    : null,
   `Total paid: ${formatCurrency(booking.estimated_total_cents || 0)}`,
   `Travelers: ${booking.travelers || '—'}`,
   `Kids: ${booking.kids || '—'}`,
   `Bags: ${booking.bags || '—'}`,
   `Paid at: ${booking.paid_at || '—'}`,
   `Created at: ${booking.created_at || '—'}`
-];
+].filter(Boolean);
 
 const bookingDetailsHtmlRows = (booking) =>
   bookingDetailsLines(booking)
@@ -596,7 +603,10 @@ const ensureBookingColumns = async (env) => {
       ['customer_user_id', 'TEXT'],
       ['driver_status', 'TEXT'],
       ['cancelled_at', 'TEXT'],
-      ['cancellation_refund_percent', 'INTEGER']
+      ['cancellation_refund_percent', 'INTEGER'],
+      ['promo_code', 'TEXT'],
+      ['promo_discount_cents', 'INTEGER'],
+      ['original_total_cents', 'INTEGER']
     ];
 
     for (const [name, type] of additions) {
@@ -1644,6 +1654,73 @@ const ensureCustomerProfile = async (env, booking) => {
       now
     )
     .run();
+};
+
+const normalizePromoCode = (value) =>
+  String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
+
+const calculatePromoDiscountCents = ({ promoCode, subtotalCents, isNativeAppClient }) => {
+  const normalizedCode = normalizePromoCode(promoCode);
+  const subtotal = Math.max(0, Number(subtotalCents || 0));
+  if (!normalizedCode || !subtotal) {
+    return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
+  }
+
+  if (isNativeAppClient && normalizedCode === '10OFF') {
+    const discountCents = Math.round(subtotal * 0.10);
+    return {
+      promoCode: normalizedCode,
+      discountCents,
+      totalCents: Math.max(0, subtotal - discountCents)
+    };
+  }
+
+  return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
+};
+
+const customerNameFromAuthPayload = (payload) => {
+  const metadata = payload?.user_metadata || {};
+  return String(
+    metadata.full_name ||
+      metadata.name ||
+      metadata.display_name ||
+      [metadata.first_name, metadata.last_name].filter(Boolean).join(' ') ||
+      ''
+  ).trim();
+};
+
+const loadCustomerProfileForAuth = async (env, authPayload) => {
+  await ensureCrmTables(env);
+  const email = String(authPayload?.email || '').trim().toLowerCase();
+  const userId = String(authPayload?.sub || authPayload?.user_id || '').trim();
+  const key = email ? `email:${email}` : userId ? `user:${userId}` : '';
+  if (!key) return null;
+
+  const profile = await env.DB.prepare(
+    `SELECT *
+     FROM customer_profiles
+     WHERE customer_key = ?
+        OR LOWER(customer_email) = ?
+        OR customer_user_id = ?
+     ORDER BY updated_at DESC
+     LIMIT 1`
+  )
+    .bind(key, email, userId)
+    .first();
+
+  const fallbackName = customerNameFromAuthPayload(authPayload);
+  return {
+    customer_key: profile?.customer_key || key,
+    customer_email: profile?.customer_email || email,
+    customer_user_id: profile?.customer_user_id || userId,
+    full_name: profile?.full_name || fallbackName,
+    phone: profile?.phone || authPayload?.phone || '',
+    status: profile?.status || 'active',
+    needs_phone: !String(profile?.phone || authPayload?.phone || '').trim()
+  };
 };
 
 const buildCustomerCrm = (bookings, profiles) => {
@@ -3625,6 +3702,72 @@ export default {
       return jsonResponse({ ok: true }, 200, origin);
     }
 
+    if (url.pathname === '/api/customer/profile') {
+      if (request.method !== 'GET' && request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      const authHeader = request.headers.get('Authorization') || '';
+      const token = authHeader.startsWith('Bearer ')
+        ? authHeader.replace('Bearer ', '').trim()
+        : '';
+      if (!token) {
+        return jsonResponse({ ok: false, error: 'Missing access token' }, 401, origin);
+      }
+
+      try {
+        const authPayload = await verifySupabaseAccessToken(token);
+        if (!authPayload) {
+          return jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin);
+        }
+
+        const email = String(authPayload.email || '').trim().toLowerCase();
+        const userId = String(authPayload.sub || authPayload.user_id || '').trim();
+        if (!email && !userId) {
+          return jsonResponse({ ok: false, error: 'Customer account is missing an email.' }, 400, origin);
+        }
+
+        if (request.method === 'GET') {
+          const profile = await loadCustomerProfileForAuth(env, authPayload);
+          return jsonResponse({ ok: true, profile }, 200, origin);
+        }
+
+        let payload;
+        try {
+          payload = await request.json();
+        } catch (error) {
+          return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+        }
+
+        const phone = String(payload?.phone || '').trim();
+        const fullName = String(payload?.full_name || payload?.fullName || '').trim() ||
+          customerNameFromAuthPayload(authPayload);
+        if (!phone && !fullName) {
+          return jsonResponse({ ok: false, error: 'Customer details are required.' }, 400, origin);
+        }
+
+        await ensureCustomerProfile(env, {
+          full_name: fullName,
+          customer_email: email,
+          customer_user_id: userId,
+          contact_number: phone,
+          created_at: new Date().toISOString()
+        });
+
+        const profile = await loadCustomerProfileForAuth(env, authPayload);
+        return jsonResponse({ ok: true, profile }, 200, origin);
+      } catch (error) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: `Unable to save customer profile: ${error?.message || 'Unknown error'}`
+          },
+          500,
+          origin
+        );
+      }
+    }
+
     if (url.pathname === '/api/customer/history') {
       if (request.method !== 'GET') {
         return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
@@ -5446,6 +5589,7 @@ export default {
       kids,
       bags,
       contact_number,
+      promo_code,
       turnstile_token
     } = payload || {};
 
@@ -5511,6 +5655,13 @@ export default {
       return jsonResponse({ ok: false, error: 'Invalid route estimate' }, 400, origin);
     }
 
+    const promo = calculatePromoDiscountCents({
+      promoCode: promo_code,
+      subtotalCents: totalCents,
+      isNativeAppClient
+    });
+    const finalTotalCents = promo.totalCents;
+
     const resolvedCustomerEmail = String(customer_email || authenticatedCustomer?.email || '').trim();
     const resolvedCustomerUserId = String(customer_user_id || authenticatedCustomer?.sub || authenticatedCustomer?.user_id || '').trim();
     const createdAt = new Date().toISOString();
@@ -5530,6 +5681,9 @@ export default {
           service_type,
           estimated_hours,
           estimated_total_cents,
+          promo_code,
+          promo_discount_cents,
+          original_total_cents,
           payment_status,
           stripe_session_id,
           payment_url,
@@ -5540,7 +5694,7 @@ export default {
           bags,
           contact_number,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           full_name,
@@ -5552,7 +5706,10 @@ export default {
           mode,
           normalizedServiceType,
           String(estimatedHours?.toFixed(2) || ''),
-          String(totalCents),
+          String(finalTotalCents),
+          promo.promoCode,
+          promo.discountCents,
+          totalCents,
           'pending_review',
           '',
           '',
@@ -5591,7 +5748,8 @@ export default {
         stopsText ? `Stops: ${stopsText}` : null,
         routeEstimate?.miles ? `Mileage: ${routeEstimate.miles.toFixed(1)} mi` : null,
         `Estimated time: ${estimatedHours?.toFixed(2)} hours`,
-        `Total: $${(totalCents / 100).toFixed(2)}`,
+        promo.promoCode ? `Promo: ${promo.promoCode}${promo.discountCents ? ` (-$${(promo.discountCents / 100).toFixed(2)})` : ' (not applied)'}` : null,
+        `Total: $${(finalTotalCents / 100).toFixed(2)}`,
         `Travelers: ${travelers || '—'}`,
         `Kids: ${kids || '—'}`,
         `Bags: ${bags || '—'}`,
@@ -5617,7 +5775,10 @@ export default {
             booking_mode: mode,
             service_type: normalizedServiceType,
             estimated_hours: String(estimatedHours?.toFixed(2) || ''),
-            estimated_total_cents: totalCents,
+            estimated_total_cents: finalTotalCents,
+            promo_code: promo.promoCode,
+            promo_discount_cents: promo.discountCents,
+            original_total_cents: totalCents,
             travelers: travelers || '',
             kids: kids || '',
             bags: bags || '',

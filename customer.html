@@ -157,6 +157,25 @@
       flex: 0 0 22px;
     }
 
+    .oauth-apple-mark {
+      width: 22px;
+      height: 22px;
+      display: inline-grid;
+      place-items: center;
+      color: #fff;
+      font-size: 1.2rem;
+      line-height: 1;
+      flex: 0 0 22px;
+    }
+
+    .signup-only {
+      display: none;
+    }
+
+    .auth-form[data-mode="sign-up"] .signup-only {
+      display: grid;
+    }
+
     .auth-note {
       color: rgba(247, 245, 242, 0.58);
       font-size: 0.8rem;
@@ -390,6 +409,10 @@
       </div>
 
       <form class="auth-form" id="auth-form">
+        <label class="signup-only">
+          Full Name
+          <input type="text" name="full_name" placeholder="Jordan Lane" autocomplete="name" />
+        </label>
         <label>
           Email
           <input type="email" name="email" placeholder="you@example.com" required />
@@ -401,6 +424,10 @@
         <input type="hidden" name="turnstile_token" value="" />
         <div class="turnstile-wrap"><div id="auth-turnstile"></div></div>
         <div class="oauth-stack">
+          <button class="secondary-btn oauth-btn" type="button" id="apple-oauth">
+            <span class="oauth-apple-mark" aria-hidden="true"></span>
+            <span>Continue with Apple</span>
+          </button>
           <button class="secondary-btn oauth-btn" type="button" id="google-oauth">
             <img class="oauth-google-mark" aria-hidden="true" src="google-g-2025.png" />
             <span>Continue with Google</span>
@@ -418,6 +445,26 @@
           Use a password you can keep secure. If you forget it later, use the reset flow below.
         </p>
       </form>
+
+      <section class="auth-shell hidden" id="profile-panel">
+        <span class="eyebrow">Customer Details</span>
+        <p class="auth-copy">
+          Add your phone number before booking so your customer profile is ready.
+        </p>
+        <form class="auth-form" id="profile-form">
+          <label>
+            Full Name
+            <input type="text" name="full_name" placeholder="Jordan Lane" autocomplete="name" />
+          </label>
+          <label>
+            Phone Number
+            <input type="tel" name="phone" placeholder="+1 (909) 555-0198" autocomplete="tel" required />
+          </label>
+          <div class="auth-actions">
+            <button class="primary-btn" type="submit" id="profile-submit">Save Details</button>
+          </div>
+        </form>
+      </section>
 
       <section class="auth-shell hidden" id="reset-panel">
         <span class="eyebrow">Reset Password</span>
