@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS bookings (
   promo_code TEXT,
   promo_discount_cents INTEGER,
   original_total_cents INTEGER,
+  gratuity_percent INTEGER,
+  gratuity_cents INTEGER,
   payment_status TEXT,
   stripe_session_id TEXT,
   payment_url TEXT,

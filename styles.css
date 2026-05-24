@@ -765,6 +765,15 @@ main {
   color: var(--gold);
 }
 
+.pricing-card-promo {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid rgba(240, 178, 71, 0.18);
+  background: rgba(0, 0, 0, 0.28);
+}
+
 .pricing-card .fine-print {
   font-size: 0.75rem;
   letter-spacing: 0.08em;
@@ -915,6 +924,23 @@ main {
   gap: 16px;
 }
 
+.flash-sale-banner {
+  width: 100%;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #fff;
+  color: #d31313;
+  text-align: center;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1px solid rgba(211, 19, 19, 0.35);
+}
+
+.flash-sale-banner strong {
+  font-weight: 1000;
+}
+
 .booking-auth-note {
   margin: 0;
   padding: 12px 14px;
@@ -949,7 +975,7 @@ body.booking-hourly .hourly-only {
 
 .estimate-card {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   padding: 14px 16px;
   border: 1px solid rgba(240, 178, 71, 0.22);
@@ -972,6 +998,13 @@ body.booking-hourly .hourly-only {
   font-size: 1.05rem;
 }
 
+.estimate-card .original-total {
+  color: var(--gold);
+  text-decoration: line-through;
+  text-decoration-color: #d31313;
+  text-decoration-thickness: 3px;
+}
+
 .booking-form input,
 .booking-form select,
 .service-select-card select {
@@ -982,6 +1015,110 @@ body.booking-hourly .hourly-only {
   color: var(--mist);
   width: 100%;
   min-width: 0;
+}
+
+.gratuity-field {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(240, 178, 71, 0.18);
+  border-radius: 12px;
+  padding: 12px;
+  margin: 0;
+}
+
+.gratuity-field legend {
+  padding: 0 6px;
+  color: rgba(247, 245, 242, 0.6);
+  font-size: 0.85rem;
+}
+
+.gratuity-options {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.gratuity-options label {
+  display: block;
+}
+
+.gratuity-options input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.gratuity-options span {
+  display: grid;
+  place-items: center;
+  min-height: 42px;
+  border-radius: 999px;
+  border: 1px solid rgba(240, 178, 71, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--mist);
+  font-weight: 800;
+}
+
+.gratuity-options small {
+  display: block;
+  font-size: 0.56rem;
+  line-height: 1;
+  opacity: 0.72;
+}
+
+.gratuity-options input:checked + span {
+  background: var(--gold);
+  color: #15100a;
+  border-color: var(--gold);
+}
+
+.custom-gratuity-input {
+  display: none;
+}
+
+.gratuity-field.is-custom .custom-gratuity-input {
+  display: block;
+}
+
+.promo-code-field {
+  display: grid;
+  gap: 8px;
+}
+
+.promo-code-row {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(86px, 1fr);
+  gap: 8px;
+}
+
+.promo-code-row input {
+  margin: 0;
+}
+
+.promo-code-row button {
+  border: 1px solid rgba(240, 178, 71, 0.3);
+  border-radius: 8px;
+  background: var(--gold);
+  color: #15100a;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.promo-code-field small {
+  color: rgba(247, 245, 242, 0.58);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.promo-code-field.is-applied input,
+.promo-code-field.is-applied button {
+  border-color: rgba(240, 178, 71, 0.75);
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--mist);
+}
+
+.promo-code-field.is-applied small {
+  color: var(--gold);
 }
 
 .service-select-card {
@@ -1311,7 +1448,88 @@ body.booking-hourly .hourly-only {
   }
 }
 
+.vehicle-choice {
+  display: grid;
+  gap: 10px;
+}
+
+.vehicle-option {
+  display: grid;
+  grid-template-columns: minmax(92px, 28%) 1fr auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 104px;
+  padding: 10px 12px;
+  border: 1px solid rgba(240, 178, 71, 0.18);
+  border-radius: 16px;
+  background: #0b0b0b;
+  color: var(--mist);
+  text-align: left;
+  cursor: pointer;
+}
+
+.vehicle-option.active {
+  border-color: rgba(240, 178, 71, 0.78);
+  background: linear-gradient(135deg, rgba(240, 178, 71, 0.98), rgba(190, 128, 28, 0.96));
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.22);
+  color: #171006;
+}
+
+.vehicle-option img {
+  width: 100%;
+  max-height: 84px;
+  object-fit: contain;
+  border-radius: 10px;
+}
+
+.vehicle-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.vehicle-copy strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 1.08rem;
+  line-height: 1.1;
+}
+
+.vehicle-capacity {
+  color: currentColor;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.vehicle-copy small {
+  width: fit-content;
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: transparent;
+  color: rgba(247, 245, 242, 0.68);
+  font-weight: 700;
+  padding-left: 0;
+}
+
+.vehicle-price {
+  color: currentColor;
+  font-size: 1.05rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.vehicle-option.active .vehicle-copy small {
+  color: rgba(36, 23, 8, 0.74);
+}
+
 @media (max-width: 800px) {
+  .estimate-card {
+    grid-template-columns: 1fr;
+  }
+
   .app-promo-inner {
     padding: 22px 24px 24px;
     gap: 15px;
@@ -1438,6 +1656,16 @@ body.booking-hourly .hourly-only {
   .utility-bar {
     padding: 10px 18px;
     font-size: 0.6rem;
+  }
+
+  .vehicle-option {
+    grid-template-columns: 84px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .vehicle-price {
+    grid-column: 2;
+    font-size: 1rem;
   }
 
   .site-header {

@@ -10,6 +10,11 @@ const HOURLY_RATE = 79;
 const ESTIMATE_SPEED_MPH = 28;
 const ESTIMATE_MINUTES_BUFFER = 18;
 const ESTIMATE_MINUTES_PER_STOP = 8;
+const PROMO_CODES = {
+  '10OFF': { type: 'percent', amount: 10, label: '10% off' },
+  '149LAX': { type: 'fixed_route_total', amountCents: 14900, routeMatch: 'LAX', label: '$149 LAX' },
+  '99SNA': { type: 'fixed_route_total', amountCents: 9900, routeMatch: 'SNA', label: '$99 SNA' }
+};
 
 const observer = new IntersectionObserver(
   (entries) => {
@@ -34,9 +39,11 @@ let customerSession = { email: '', userId: '', accessToken: '', profile: null, n
 let bookingAuthReady = false;
 let estimateRequestId = 0;
 let estimateTimer = null;
+let currentEstimateMiles = null;
 let bookingButton = null;
 let bookingForm = null;
 let bookingTurnstile = null;
+let appliedPromoCode = '';
 
 const waitForTurnstile = () =>
   new Promise((resolve) => {
@@ -95,28 +102,61 @@ let pricingState = {
   serviceTypes: ['Executive Black SUV', 'Black Luxury Sedan'],
   defaultServiceType: 'Executive Black SUV',
   featuredRoutes: [
-    { label: 'LGB → Disneyland', price: 98 },
-    { label: 'ONT → Palm Springs', price: 399 },
-    { label: 'LAX → Palm Springs', price: 599 },
-    { label: 'OC → Vegas', price: 1199 }
-  ]
+    { label: 'LGB → Disneyland', price: 98, image_url: '' },
+    { label: 'ONT → Palm Springs', price: 399, image_url: '' },
+    { label: 'LAX → Palm Springs', price: 599, image_url: '' },
+    { label: 'OC → Vegas', price: 1199, image_url: '' }
+  ],
+  promoCodes: { ...PROMO_CODES }
+};
+
+const preferredServiceTypes = ['Executive Black SUV', 'Black Luxury Sedan'];
+
+const getSelectedServiceType = () =>
+  bookingForm?.querySelector('[name="serviceType"]')?.value.trim() ||
+  pricingState.defaultServiceType ||
+  preferredServiceTypes[0];
+
+const serviceMileRate = (serviceType) => {
+  const normalized = String(serviceType || '').toLowerCase();
+  if (normalized.includes('sedan')) return 3;
+  return 4;
+};
+
+const calculateTripBaseTotal = ({ hours, miles, serviceType }) => {
+  if (!Number.isFinite(hours) || !Number.isFinite(miles)) return null;
+  const hourlyTotal = hours * pricingState.hourlyRate;
+  const mileageTotal = miles * serviceMileRate(serviceType);
+  return Math.round((hourlyTotal + mileageTotal) * 100) / 100;
 };
 
 const syncServiceTypeField = () => {
-  const selects = document.querySelectorAll('select[name="serviceType"]');
-  if (!selects.length) return;
+  const fields = document.querySelectorAll('[name="serviceType"]');
+  const cards = document.querySelectorAll('[data-service-type]');
+  if (!fields.length && !cards.length) return;
   const options = Array.isArray(pricingState.serviceTypes) && pricingState.serviceTypes.length
     ? pricingState.serviceTypes
-    : ['Executive Black SUV', 'Black Luxury Sedan'];
+    : preferredServiceTypes;
   const defaultValue = options.includes(pricingState.defaultServiceType)
     ? pricingState.defaultServiceType
-    : options[0];
-  selects.forEach((select) => {
-    const currentValue = options.includes(select.value) ? select.value : defaultValue;
-    select.innerHTML = options
-      .map((option) => `<option value="${option}">${option}</option>`)
-      .join('');
-    select.value = currentValue;
+    : preferredServiceTypes.find((option) => options.includes(option)) || options[0];
+  const currentValue = options.includes(getSelectedServiceType())
+    ? getSelectedServiceType()
+    : defaultValue;
+
+  fields.forEach((field) => {
+    if (field.tagName === 'SELECT') {
+      field.innerHTML = options
+        .map((option) => `<option value="${option}">${option}</option>`)
+        .join('');
+    }
+    field.value = currentValue;
+  });
+
+  cards.forEach((card) => {
+    const isActive = card.dataset.serviceType === currentValue;
+    card.classList.toggle('active', isActive);
+    card.setAttribute('aria-pressed', isActive ? 'true' : 'false');
   });
 };
 
@@ -160,6 +200,18 @@ const loadCustomerProfile = async (accessToken) => {
     throw new Error(data?.error || 'Unable to load customer profile.');
   }
   return data.profile || null;
+};
+
+const applyCustomerDetailsToBooking = (profile = customerSession.profile) => {
+  if (!bookingForm || !profile) return;
+  const fullNameInput = bookingForm.querySelector('[name="fullName"]');
+  const phoneInput = bookingForm.querySelector('[name="contactNumber"]');
+  if (fullNameInput && !fullNameInput.value.trim() && profile.full_name) {
+    fullNameInput.value = profile.full_name;
+  }
+  if (phoneInput && !phoneInput.value.trim() && profile.phone) {
+    phoneInput.value = profile.phone;
+  }
 };
 
 const geocodeLocation = async (query, locationType = 'all') => {
@@ -277,6 +329,10 @@ const applyPricingLabels = () => {
     .map((route, index) => {
       const label = String(route.label || '').trim();
       const price = `$${formatPriceValue(route.price)}`;
+      const imageUrl = String(route.image_url || route.imageUrl || '').trim();
+      const imageMarkup = imageUrl
+        ? `<img class="pricing-card-promo" src="${imageUrl.replace(/"/g, '&quot;')}" alt="${label} promo" loading="lazy" />`
+        : '';
       const body = `Hi Luxtravco,%0D%0A%0D%0AI would like to reserve chauffeured service for the ${label} route.%0D%0AName:%0D%0APreferred date/time:%0D%0AContact number:%0D%0A%0D%0AThanks!`;
       const isFeatured = index === 0;
       return {
@@ -285,6 +341,7 @@ const applyPricingLabels = () => {
             <h3>${label}</h3>
             <p>Direct chauffeured service for the ${label} route.</p>
             <span class="price">${price}</span>
+            ${imageMarkup}
             <ul>
               <li>Chauffeured Suburban for the route</li>
               <li>Professional presentation standard</li>
@@ -305,6 +362,7 @@ const applyPricingLabels = () => {
             <h3>${label}</h3>
             <strong>${price}</strong>
             <p>Direct chauffeured service for the ${label} route.</p>
+            ${imageMarkup}
           </div>
         `
       };
@@ -331,10 +389,36 @@ const loadPricingSettings = async () => {
       ? data.pricing.featured_routes
           .map((route) => ({
             label: String(route?.label || '').trim(),
-            price: Number.parseFloat(route?.price)
+            price: Number.parseFloat(route?.price),
+            image_url: String(route?.image_url || route?.imageUrl || '').trim()
           }))
           .filter((route) => route.label && Number.isFinite(route.price) && route.price > 0)
       : [];
+    const promoCodes = Array.isArray(data?.pricing?.promo_codes)
+      ? data.pricing.promo_codes.reduce((map, promo) => {
+          const code = String(promo?.code || '').trim().toUpperCase().replace(/\s+/g, '');
+          const type = String(promo?.type || '').trim();
+          const percent = Number.parseFloat(promo?.percent);
+          const amountCents = Number.parseInt(promo?.amount_cents, 10);
+          const routeMatch = String(promo?.route_match || '').trim().toUpperCase();
+          const pickupMatch = String(promo?.pickup_match || '').trim();
+          const dropoffMatch = String(promo?.dropoff_match || '').trim();
+          const pickupCities = Array.isArray(promo?.pickup_cities)
+            ? promo.pickup_cities.map((city) => String(city || '').trim()).filter(Boolean)
+            : [];
+          const roundTripOnly = promo?.round_trip_only === true;
+          const roundTripPickupMatch = String(promo?.round_trip_pickup_match || '').trim();
+          const roundTripDropoffMatch = String(promo?.round_trip_dropoff_match || '').trim();
+          if (code && type === 'fixed_route_total' && Number.isFinite(amountCents) && amountCents > 0 && (routeMatch || dropoffMatch || roundTripPickupMatch || roundTripDropoffMatch)) {
+            map[code] = { type, amountCents, routeMatch, pickupMatch, dropoffMatch, pickupCities, roundTripOnly, roundTripPickupMatch, roundTripDropoffMatch, label: `$${(amountCents / 100).toFixed(0)} ${routeMatch || 'route'}` };
+          } else if (code && type === 'fixed_discount' && Number.isFinite(amountCents) && amountCents > 0) {
+            map[code] = { type, amountCents, pickupMatch, dropoffMatch, pickupCities, roundTripOnly, roundTripPickupMatch, roundTripDropoffMatch, label: `$${(amountCents / 100).toFixed(0)} off` };
+          } else if (code && Number.isFinite(percent) && percent > 0 && percent <= 100) {
+            map[code] = { type: 'percent', amount: percent, pickupMatch, dropoffMatch, pickupCities, roundTripOnly, roundTripPickupMatch, roundTripDropoffMatch, label: `${percent}% off` };
+          }
+          return map;
+        }, {})
+      : {};
     if (Number.isFinite(hourlyRate) && hourlyRate > 0) {
       pricingState.hourlyRate = hourlyRate;
     }
@@ -346,6 +430,9 @@ const loadPricingSettings = async () => {
     }
     if (featuredRoutes.length) {
       pricingState.featuredRoutes = featuredRoutes;
+    }
+    if (Object.keys(promoCodes).length) {
+      pricingState.promoCodes = promoCodes;
     }
     applyPricingLabels();
     scheduleEstimateUpdate();
@@ -359,6 +446,7 @@ const refreshBookingAccess = async () => {
   const customerContext = await getCustomerContext();
   customerSession = customerContext;
   bookingAuthReady = true;
+  applyCustomerDetailsToBooking(customerContext.profile);
   ensureBookingAuthNotice();
   const notice = bookingForm.querySelector('.booking-auth-note');
   if (notice && customerContext.needsPhone) {
@@ -690,6 +778,168 @@ const primaryScheduleDefaults = () => ({
   time: bookingForm?.querySelector('[name="pickupTime"]')?.value || ''
 });
 
+const getSelectedGratuityPercent = () => {
+  const selected = bookingForm?.querySelector('[name="gratuityPercent"]:checked')?.value || '0';
+  if (selected === 'custom') {
+    const custom = Number.parseFloat(bookingForm?.querySelector('[name="customGratuityPercent"]')?.value || '0');
+    return Number.isFinite(custom) ? Math.max(15, custom) : 15;
+  }
+  return ['0', '15', '25', '50'].includes(selected) ? Number(selected) : 0;
+};
+
+const normalizePromoCode = (value) =>
+  String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
+
+const routeMatchAliases = (match) => {
+  const normalized = String(match || '').trim().toUpperCase();
+  if (!normalized) return [];
+  if (normalized === 'LAX') {
+    return ['LAX', 'LOS ANGELES INTERNATIONAL AIRPORT', '90045'];
+  }
+  if (normalized === 'SNA') {
+    return ['18601 AIRPORT WAY, SANTA ANA, CA 92707'];
+  }
+  return [normalized];
+};
+
+const destinationMatchesPromo = (promo, destinationText) => {
+  const text = String(destinationText || '').toUpperCase();
+  const aliases = routeMatchAliases(promo?.routeMatch);
+  return !aliases.length || aliases.some((alias) => text.includes(alias));
+};
+
+const addressMatchesPromoValue = (actualText, expectedText) => {
+  const expected = String(expectedText || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  if (!expected) return true;
+  const actual = String(actualText || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  return actual.includes(expected);
+};
+
+const pickupCityMatchesPromo = (promo, pickupText) => {
+  const cities = Array.isArray(promo?.pickupCities) ? promo.pickupCities : [];
+  if (!cities.length) return true;
+  const actual = String(pickupText || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  return cities.some((city) => actual.includes(String(city || '').trim().toUpperCase().replace(/\s+/g, ' ')));
+};
+
+const currentRoundTripText = () =>
+  Array.from(bookingForm?.querySelectorAll('.roundtrip-leg input[type="text"]') || [])
+    .map((input) => input.value || '')
+    .join(' ');
+
+const roundTripMatchesPromo = (promo) => {
+  const text = currentRoundTripText();
+  if (promo?.roundTripOnly && (bookingMode !== 'hourly' || !text.trim())) return false;
+  return addressMatchesPromoValue(text, promo?.roundTripPickupMatch) &&
+    addressMatchesPromoValue(text, promo?.roundTripDropoffMatch);
+};
+
+const addressPairMatchesPromo = (promo, pickupText, destinationText) =>
+  pickupCityMatchesPromo(promo, pickupText) &&
+  addressMatchesPromoValue(pickupText, promo?.pickupMatch) &&
+  addressMatchesPromoValue(destinationText, promo?.dropoffMatch) &&
+  roundTripMatchesPromo(promo);
+
+const pickupMatchesAirportPromo = (pickupText) => {
+  const text = String(pickupText || '').toUpperCase();
+  return text.includes('CORONA') || text.includes('RIVERSIDE');
+};
+
+const destinationMatches99Sna = (destinationText) => {
+  const text = String(destinationText || '').toUpperCase().replace(/\s+/g, ' ');
+  return text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707');
+};
+
+const pickupMatchesSnaAirport = (pickupText) => {
+  const text = String(pickupText || '').toUpperCase().replace(/\s+/g, ' ');
+  return text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707');
+};
+
+const destinationMatchesDisneyland = (destinationText) => {
+  const text = String(destinationText || '').toUpperCase().replace(/\s+/g, ' ');
+  return text.includes('1313 DISNEYLAND DR') && text.includes('ANAHEIM') && text.includes('92802');
+};
+
+const calculateAutomaticRouteDiscount = (subtotal) => {
+  if (!Number.isFinite(subtotal) || subtotal <= 0) return 0;
+  const pickupText = bookingForm?.querySelector('[name="pickupLocation"]')?.value || '';
+  const destinationText = bookingForm?.querySelector('[name="dropoffLocation"]')?.value || '';
+  if (!pickupMatchesSnaAirport(pickupText) || !destinationMatchesDisneyland(destinationText)) return 0;
+  return Math.max(0, subtotal - 75);
+};
+
+const calculatePromoDiscount = (subtotal, promoCode = appliedPromoCode) => {
+  const normalizedCode = normalizePromoCode(promoCode);
+  const promo = pricingState.promoCodes[normalizedCode];
+  if (!promo || !Number.isFinite(subtotal) || subtotal <= 0) return 0;
+  if (promo.type === 'percent') {
+    const pickupText = bookingForm?.querySelector('[name="pickupLocation"]')?.value || '';
+    const destinationText = bookingForm?.querySelector('[name="dropoffLocation"]')?.value || '';
+    if (!addressPairMatchesPromo(promo, pickupText, destinationText)) return 0;
+    return Math.round(subtotal * promo.amount) / 100;
+  }
+  if (promo.type === 'fixed_discount') {
+    const pickupText = bookingForm?.querySelector('[name="pickupLocation"]')?.value || '';
+    const destinationText = bookingForm?.querySelector('[name="dropoffLocation"]')?.value || '';
+    if (!addressPairMatchesPromo(promo, pickupText, destinationText)) return 0;
+    return Math.min(subtotal, promo.amountCents / 100);
+  }
+  if (promo.type === 'fixed_route_total') {
+    const pickupText = [
+      bookingForm?.querySelector('[name="pickupLocation"]')?.value || ''
+    ].join(' ').toUpperCase();
+    const destinationText = [
+      bookingForm?.querySelector('[name="dropoffLocation"]')?.value || '',
+      ...Array.from(bookingForm?.querySelectorAll('.roundtrip-leg input[type="text"]') || []).map((input) => input.value || '')
+    ].join(' ').toUpperCase();
+    if ((normalizedCode === '149LAX' || normalizedCode === '99SNA') && !pickupMatchesAirportPromo(pickupText)) return 0;
+    if (normalizedCode === '99SNA' && !destinationMatches99Sna(destinationText)) return 0;
+    if (!addressPairMatchesPromo(promo, pickupText, destinationText)) return 0;
+    if (!destinationMatchesPromo(promo, destinationText)) return 0;
+    return Math.max(0, subtotal - promo.amountCents / 100);
+  }
+  return 0;
+};
+
+const syncPromoStatus = (message = '') => {
+  const field = bookingForm?.querySelector('.promo-code-field');
+  const button = bookingForm?.querySelector('[data-action="apply-promo"]');
+  const status = document.getElementById('promo-status');
+  const hasPromo = Boolean(appliedPromoCode);
+  field?.classList.toggle('is-applied', hasPromo);
+  if (button) button.textContent = hasPromo ? 'Applied' : 'Apply';
+  if (status) {
+    status.textContent = message || (hasPromo
+      ? `${appliedPromoCode} applied. Your estimate includes the discount.`
+      : 'Promo code will apply to your trip estimate.');
+  }
+};
+
+const applyPromoCode = () => {
+  const input = bookingForm?.querySelector('[name="promoCode"]');
+  const normalizedCode = normalizePromoCode(input?.value || '');
+  if (!normalizedCode) {
+    appliedPromoCode = '';
+    if (input) input.value = '';
+    syncPromoStatus();
+    updateEstimateDisplay();
+    return;
+  }
+  if (!pricingState.promoCodes[normalizedCode]) {
+    appliedPromoCode = '';
+    syncPromoStatus('Promo code not active.');
+    updateEstimateDisplay();
+    return;
+  }
+  appliedPromoCode = normalizedCode;
+  if (input) input.value = normalizedCode;
+  syncPromoStatus();
+  updateEstimateDisplay();
+};
+
 const clearRoundTripLegs = () => {
   const container = roundTripStopsContainer();
   if (container) container.innerHTML = '';
@@ -804,6 +1054,7 @@ const formatUSPhone = (value) => {
   let cleaned = digits;
   if (cleaned.startsWith('1')) cleaned = cleaned.slice(1);
   cleaned = cleaned.slice(0, 10);
+  if (!cleaned) return '';
 
   const parts = [];
   if (cleaned.length > 0) {
@@ -823,15 +1074,8 @@ const setupPhoneMask = () => {
   const phoneInput = bookingForm?.querySelector('[name="contactNumber"]');
   if (!phoneInput) return;
 
-  const ensurePrefix = () => {
-    if (!phoneInput.value.trim()) {
-      phoneInput.value = '+1 ';
-    }
-  };
-
-  phoneInput.addEventListener('focus', ensurePrefix);
-
-  phoneInput.addEventListener('input', () => {
+  phoneInput.addEventListener('input', (event) => {
+    if (event.inputType && event.inputType.startsWith('delete')) return;
     phoneInput.value = formatUSPhone(phoneInput.value);
   });
 };
@@ -884,6 +1128,13 @@ if (travelersInput && kidsInput && bagsInput) {
 const handleBookingSubmit = async (event) => {
   if (event) event.preventDefault();
   if (!bookingForm) return;
+  const typedPromoCode = normalizePromoCode(bookingForm.querySelector('[name="promoCode"]')?.value || '');
+  if (typedPromoCode && pricingState.promoCodes[typedPromoCode] && typedPromoCode !== appliedPromoCode) {
+    appliedPromoCode = typedPromoCode;
+    const promoInput = bookingForm.querySelector('[name="promoCode"]');
+    if (promoInput) promoInput.value = typedPromoCode;
+    syncPromoStatus();
+  }
 
   const fullName = bookingForm.querySelector('[name="fullName"]')?.value.trim();
   const pickupDate = bookingForm
@@ -926,8 +1177,15 @@ const handleBookingSubmit = async (event) => {
     return;
   }
 
-  const estimatedTotalCents = verifiedEstimateHours
-    ? Math.round(pricingState.hourlyRate * verifiedEstimateHours * 100)
+  const estimatedBaseTotal = verifiedEstimateHours && Number.isFinite(currentEstimateMiles)
+    ? calculateTripBaseTotal({
+        hours: verifiedEstimateHours,
+        miles: currentEstimateMiles,
+        serviceType: getSelectedServiceType()
+      })
+    : null;
+  const estimatedTotalCents = Number.isFinite(estimatedBaseTotal)
+    ? Math.round(estimatedBaseTotal * 100)
     : null;
 
   const payload = {
@@ -937,7 +1195,7 @@ const handleBookingSubmit = async (event) => {
     pickup_location: pickupLocation || '',
     dropoff_location: dropoffLocation || '',
     booking_mode: bookingMode,
-    service_type: bookingForm.querySelector('[name="serviceType"]')?.value.trim() || pricingState.defaultServiceType,
+    service_type: getSelectedServiceType(),
     estimated_hours: verifiedEstimateHours || '',
     estimated_total_cents: estimatedTotalCents || '',
     customer_email: customerContext.email || '',
@@ -948,9 +1206,8 @@ const handleBookingSubmit = async (event) => {
     contact_number: bookingForm
       .querySelector('[name="contactNumber"]')
       ?.value.trim() || '',
-    promo_code: bookingForm
-      .querySelector('[name="promoCode"]')
-      ?.value.trim() || '',
+    promo_code: appliedPromoCode,
+    gratuity_percent: getSelectedGratuityPercent(),
     stops: Array.from(bookingForm.querySelectorAll('.roundtrip-leg')).map((leg, index) => {
       const pickup = leg.querySelector(`[name="roundTripPickup${index}"]`);
       const dropoff = leg.querySelector(`[name="roundTripDropoff${index}"]`);
@@ -1039,18 +1296,59 @@ if (bookingButton) {
 
 if (bookingForm) {
   bookingForm.addEventListener('submit', handleBookingSubmit);
+  bookingForm.querySelectorAll('[data-service-type]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const serviceType = card.dataset.serviceType || pricingState.defaultServiceType;
+      bookingForm.querySelectorAll('[name="serviceType"]').forEach((field) => {
+        field.value = serviceType;
+      });
+      syncServiceTypeField();
+      updateEstimateDisplay();
+    });
+  });
+  bookingForm.querySelectorAll('[name="gratuityPercent"]').forEach((input) => {
+    input.addEventListener('change', () => {
+      bookingForm.querySelector('.gratuity-field')?.classList.toggle('is-custom', input.value === 'custom' && input.checked);
+      if (input.value === 'custom' && input.checked) {
+        const customInput = bookingForm.querySelector('[name="customGratuityPercent"]');
+        if (customInput && !customInput.value) customInput.value = '15';
+      }
+      updateEstimateDisplay();
+    });
+  });
+  bookingForm.querySelector('[name="customGratuityPercent"]')?.addEventListener('input', updateEstimateDisplay);
+  bookingForm.querySelector('[data-action="apply-promo"]')?.addEventListener('click', applyPromoCode);
+  bookingForm.querySelector('[name="promoCode"]')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      applyPromoCode();
+    }
+  });
+  bookingForm.querySelector('[name="promoCode"]')?.addEventListener('input', () => {
+    const normalizedCode = normalizePromoCode(bookingForm.querySelector('[name="promoCode"]')?.value || '');
+    if (appliedPromoCode && normalizedCode !== appliedPromoCode) {
+      appliedPromoCode = '';
+      syncPromoStatus();
+      updateEstimateDisplay();
+    }
+  });
   bookingForm.addEventListener('reset', () => {
     currentEstimateHours = null;
+    currentEstimateMiles = null;
+    appliedPromoCode = '';
     bookingForm.querySelectorAll('[data-route-point]').forEach((input) => {
       input.dataset.lat = '';
       input.dataset.lng = '';
     });
     setTimeout(() => {
-      const serviceSelect = bookingForm.querySelector('[name="serviceType"]');
-      if (serviceSelect) {
-        serviceSelect.value = pricingState.defaultServiceType;
-      }
+      bookingForm.querySelectorAll('[name="serviceType"]').forEach((field) => {
+        field.value = pricingState.defaultServiceType;
+      });
+      syncServiceTypeField();
       document.body.classList.toggle('booking-hourly', bookingMode === 'hourly');
+      bookingForm.querySelector('.gratuity-field')?.classList.remove('is-custom');
+      syncPromoStatus();
+      applyCustomerDetailsToBooking();
       scheduleEstimateUpdate();
       setBookingSubmissionState(Boolean(customerSession.email || customerSession.userId));
     }, 0);
@@ -1102,6 +1400,11 @@ const extractRoutePoints = () => {
 };
 
 const calculateEstimateHours = (points) => {
+  const metrics = calculateRouteMetrics(points);
+  return metrics ? metrics.hours : null;
+};
+
+const calculateRouteMetrics = (points) => {
   const usablePoints = points.filter(
     (point) => Number.isFinite(point.lat) && Number.isFinite(point.lng)
   );
@@ -1117,12 +1420,16 @@ const calculateEstimateHours = (points) => {
   const drivingMinutes = (miles / ESTIMATE_SPEED_MPH) * 60 * 1.28;
   const totalMinutes =
     drivingMinutes + ESTIMATE_MINUTES_BUFFER + stopCount * ESTIMATE_MINUTES_PER_STOP;
-  return Math.max(0.25, totalMinutes / 60);
+  return {
+    hours: Math.max(0.25, totalMinutes / 60),
+    miles
+  };
 };
 
 async function updateEstimateDisplay() {
   const estimateHoursEl = document.getElementById('estimated-hours');
   const estimateTotalEl = document.getElementById('estimated-total');
+  const originalTotalEl = document.getElementById('original-total');
   if (!estimateHoursEl || !estimateTotalEl) return;
 
   const requestId = ++estimateRequestId;
@@ -1130,22 +1437,53 @@ async function updateEstimateDisplay() {
   estimateHoursEl.textContent = 'Estimating...';
   estimateTotalEl.textContent = '$0.00';
 
-  const estimateHours = await calculateEstimateHours(await resolveRoutePoints());
-  if (requestId !== estimateRequestId) return estimateHours;
-  currentEstimateHours = estimateHours;
-  if (!estimateHours) {
+  const routeMetrics = calculateRouteMetrics(await resolveRoutePoints());
+  if (requestId !== estimateRequestId) return routeMetrics?.hours || null;
+  currentEstimateHours = routeMetrics?.hours || null;
+  currentEstimateMiles = routeMetrics?.miles || null;
+  if (!routeMetrics) {
     estimateHoursEl.textContent = 'Select locations';
     estimateTotalEl.textContent = '$0.00';
-    return estimateHours;
+    if (originalTotalEl) originalTotalEl.textContent = '$0.00';
+    document.querySelectorAll('[data-vehicle-price]').forEach((node) => {
+      node.textContent = 'Select route';
+    });
+    return null;
   }
 
-  const estimatedTotal = Math.round(estimateHours * pricingState.hourlyRate * 100) / 100;
-  estimateHoursEl.textContent = formatEstimateHours(estimateHours);
-  estimateTotalEl.textContent = `$${estimatedTotal.toFixed(2)}`;
+  document.querySelectorAll('[data-vehicle-price]').forEach((node) => {
+    const serviceType = node.dataset.vehiclePrice || pricingState.defaultServiceType;
+    const vehicleBase = calculateTripBaseTotal({
+      hours: routeMetrics.hours,
+      miles: routeMetrics.miles,
+      serviceType
+    });
+    node.textContent = Number.isFinite(vehicleBase) ? `$${(vehicleBase * 1.10).toFixed(2)}` : 'Select route';
+  });
+
+  const baseTotal = calculateTripBaseTotal({
+    hours: routeMetrics.hours,
+    miles: routeMetrics.miles,
+    serviceType: getSelectedServiceType()
+  });
+  const automaticRouteDiscount = calculateAutomaticRouteDiscount(baseTotal);
+  const promoDiscount = calculatePromoDiscount(baseTotal);
+  const totalDiscount = Math.max(automaticRouteDiscount, promoDiscount);
+  const discountedBaseTotal = Math.max(0, baseTotal - totalDiscount);
+  const gratuityTotal = Math.round(baseTotal * getSelectedGratuityPercent()) / 100;
+  const originalTotal = baseTotal * 1.10 + gratuityTotal;
+  const estimatedTotal = discountedBaseTotal + gratuityTotal;
+  estimateHoursEl.textContent = formatEstimateHours(routeMetrics.hours);
+  if (originalTotalEl) originalTotalEl.textContent = `$${originalTotal.toFixed(2)}`;
+  estimateTotalEl.textContent = automaticRouteDiscount > 0 && automaticRouteDiscount >= promoDiscount
+    ? `$${estimatedTotal.toFixed(2)} (SNA to Disneyland)`
+    : promoDiscount > 0
+    ? `$${estimatedTotal.toFixed(2)} (${appliedPromoCode})`
+    : `$${estimatedTotal.toFixed(2)}`;
   if (bookingMode !== 'hourly') {
     estimateTotalEl.textContent = `${estimateTotalEl.textContent} estimate`;
   }
-  return estimateHours;
+  return routeMetrics.hours;
 }
 
 function scheduleEstimateUpdate() {

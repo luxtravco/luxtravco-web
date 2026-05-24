@@ -249,6 +249,9 @@ const bookingDetailsLines = (booking) => [
   Number(booking.original_total_cents || 0) > 0
     ? `Original total: ${formatCurrency(booking.original_total_cents || 0)}`
     : null,
+  Number(booking.gratuity_percent || 0) > 0
+    ? `Driver gratuity: ${Number(booking.gratuity_percent || 0)}% (${formatCurrency(booking.gratuity_cents || 0)})`
+    : null,
   `Total paid: ${formatCurrency(booking.estimated_total_cents || 0)}`,
   `Travelers: ${booking.travelers || '—'}`,
   `Kids: ${booking.kids || '—'}`,
@@ -514,13 +517,26 @@ const DEFAULT_FEATURED_ROUTES = [
   { key: 'route_3', label: 'LAX → Palm Springs', price: 599 },
   { key: 'route_4', label: 'OC → Vegas', price: 1199 }
 ];
+const DEFAULT_PROMO_CODES = [
+  { code: '10OFF', type: 'percent', percent: 10 },
+  { code: '149LAX', type: 'fixed_route_total', amount_cents: 14900, route_match: 'LAX', pickup_cities: ['Corona', 'Riverside'] },
+  { code: '99SNA', type: 'fixed_route_total', amount_cents: 9900, route_match: 'SNA', pickup_cities: ['Corona', 'Riverside'] }
+];
 const LEGACY_FEATURED_ROUTES = [
-  { key: 'route_1', label: 'LGB → Disneyland', price: 99 },
-  { key: 'route_2', label: 'ONT → Palm Springs', price: 400 },
-  { key: 'route_3', label: 'LAX → Palm Springs', price: 600 },
-  { key: 'route_4', label: 'OC → Vegas', price: 1200 }
+  { key: 'route_1', label: 'LGB → Disneyland', price: 99, image_url: '' },
+  { key: 'route_2', label: 'ONT → Palm Springs', price: 400, image_url: '' },
+  { key: 'route_3', label: 'LAX → Palm Springs', price: 600, image_url: '' },
+  { key: 'route_4', label: 'OC → Vegas', price: 1200, image_url: '' }
 ];
 const routeKeyForIndex = (index) => `route_${index + 1}`;
+const normalizeRouteImage = (value) => {
+  const image = String(value || '').trim();
+  if (!image) return '';
+  if (/^data:image\/(?:png|jpe?g|webp);base64,[a-z0-9+/=]+$/i.test(image) && image.length <= 900000) {
+    return image;
+  }
+  return '';
+};
 const normalizeServiceTypes = (value) => {
   const parts = Array.isArray(value)
     ? value
@@ -534,6 +550,129 @@ const normalizeServiceTypes = (value) => {
   }
   return unique.length ? unique : [...DEFAULT_SERVICE_TYPES];
 };
+const normalizePromoCities = (value) => {
+  const entries = Array.isArray(value)
+    ? value
+    : String(value || '')
+        .split(/[\n,]/g)
+        .map((entry) => entry.trim());
+  const cities = [];
+  for (const entry of entries) {
+    const city = String(entry || '').trim();
+    if (!city) continue;
+    if (!cities.some((candidate) => candidate.toUpperCase() === city.toUpperCase())) cities.push(city);
+  }
+  return cities;
+};
+const normalizePromoCodes = (value) => {
+  let entries = [];
+  if (Array.isArray(value)) {
+    entries = value;
+  } else {
+    const raw = String(value || '').trim();
+    if (!raw) return [...DEFAULT_PROMO_CODES];
+    try {
+      const parsed = JSON.parse(raw);
+      entries = Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      entries = raw
+        .split(/[\n,]/g)
+        .map((line) => {
+          const [code, value] = line.split(/[=:]/);
+          const [amount, routeMatch] = String(value || '').split('@');
+          const trimmedAmount = String(amount || '').trim();
+          if (trimmedAmount.startsWith('$') || routeMatch) {
+            return {
+              code,
+              type: 'fixed_route_total',
+              amount_cents: Math.round(Number.parseFloat(trimmedAmount.replace(/^\$/, '')) * 100),
+              route_match: routeMatch || ''
+            };
+          }
+          return { code, type: 'percent', percent: trimmedAmount.replace(/%$/, '') };
+        });
+    }
+  }
+
+  const promos = [];
+  for (const entry of entries) {
+    const code = String(entry?.code || '').trim().toUpperCase().replace(/\s+/g, '');
+    const type = String(entry?.type || '').trim() || (entry?.amount_cents ? 'fixed_route_total' : 'percent');
+    const pickupMatch = String(entry?.pickup_match || entry?.pickup || '').trim();
+    const dropoffMatch = String(entry?.dropoff_match || entry?.dropoff || '').trim();
+    const pickupCities = normalizePromoCities(entry?.pickup_cities || entry?.pickupCities || entry?.cities || '');
+    const roundTripOnly = entry?.round_trip_only === true || entry?.roundTripOnly === true || String(entry?.round_trip_only || '').toLowerCase() === 'true';
+    const roundTripPickupMatch = String(entry?.round_trip_pickup_match || entry?.roundTripPickupMatch || '').trim();
+    const roundTripDropoffMatch = String(entry?.round_trip_dropoff_match || entry?.roundTripDropoffMatch || '').trim();
+    if (!code) continue;
+    if (promos.some((promo) => promo.code === code)) continue;
+    if (type === 'fixed_route_total') {
+      const amountCents = Math.round(Number(entry?.amount_cents ?? 0));
+      const routeMatch = String(entry?.route_match || entry?.match || '').trim().toUpperCase();
+      if (!Number.isFinite(amountCents) || amountCents <= 0 || (!routeMatch && !dropoffMatch && !roundTripPickupMatch && !roundTripDropoffMatch)) continue;
+      promos.push({
+        code,
+        type: 'fixed_route_total',
+        amount_cents: amountCents,
+        route_match: routeMatch,
+        pickup_match: pickupMatch,
+        dropoff_match: dropoffMatch,
+        pickup_cities: pickupCities,
+        round_trip_only: roundTripOnly,
+        round_trip_pickup_match: roundTripPickupMatch,
+        round_trip_dropoff_match: roundTripDropoffMatch
+      });
+      continue;
+    }
+    if (type === 'fixed_discount') {
+      const amountCents = Math.round(Number(entry?.amount_cents ?? entry?.discount_cents ?? 0));
+      if (!Number.isFinite(amountCents) || amountCents <= 0) continue;
+      promos.push({
+        code,
+        type: 'fixed_discount',
+        amount_cents: amountCents,
+        pickup_match: pickupMatch,
+        dropoff_match: dropoffMatch,
+        pickup_cities: pickupCities,
+        round_trip_only: roundTripOnly,
+        round_trip_pickup_match: roundTripPickupMatch,
+        round_trip_dropoff_match: roundTripDropoffMatch
+      });
+      continue;
+    }
+    const percent = Number.parseFloat(entry?.percent ?? entry?.amount ?? entry?.discount_percent);
+    if (!Number.isFinite(percent) || percent <= 0 || percent > 100) continue;
+    promos.push({
+      code,
+      type: 'percent',
+      percent: Math.round(percent * 100) / 100,
+      pickup_match: pickupMatch,
+      dropoff_match: dropoffMatch,
+      pickup_cities: pickupCities,
+      round_trip_only: roundTripOnly,
+      round_trip_pickup_match: roundTripPickupMatch,
+      round_trip_dropoff_match: roundTripDropoffMatch
+    });
+  }
+  return promos.length ? promos : [...DEFAULT_PROMO_CODES];
+};
+const promoCodesToTextarea = (promos) =>
+  normalizePromoCodes(promos)
+    .map((promo) => promo.type === 'fixed_route_total'
+      ? `${promo.code}=$${(promo.amount_cents / 100).toFixed(0)}@${promo.route_match}`
+      : promo.type === 'fixed_discount'
+        ? `${promo.code}=$${(promo.amount_cents / 100).toFixed(0)}`
+      : `${promo.code}=${promo.percent}`)
+    .join('\n');
+
+const promoTypeOptions = (selectedType) =>
+  [
+    ['percent', 'Percentage'],
+    ['fixed_discount', 'Dollars off'],
+    ['fixed_route_total', 'Address total']
+  ]
+    .map(([value, label]) => `<option value="${value}" ${value === selectedType ? 'selected' : ''}>${label}</option>`)
+    .join('');
 let bookingColumnsReady;
 let pricingSettingsReady;
 let supabaseJwksPromise;
@@ -606,7 +745,9 @@ const ensureBookingColumns = async (env) => {
       ['cancellation_refund_percent', 'INTEGER'],
       ['promo_code', 'TEXT'],
       ['promo_discount_cents', 'INTEGER'],
-      ['original_total_cents', 'INTEGER']
+      ['original_total_cents', 'INTEGER'],
+      ['gratuity_percent', 'INTEGER'],
+      ['gratuity_cents', 'INTEGER']
     ];
 
     for (const [name, type] of additions) {
@@ -751,6 +892,7 @@ const ensurePricingSettings = async (env) => {
       ['driver_emails', String(env.DRIVER_EMAILS || '')],
       ['service_types', JSON.stringify(DEFAULT_SERVICE_TYPES)],
       ['default_service_type', DEFAULT_SERVICE_TYPE],
+      ['promo_codes', JSON.stringify(DEFAULT_PROMO_CODES)],
       ['route_count', String(DEFAULT_FEATURED_ROUTES.length)],
       ...DEFAULT_FEATURED_ROUTES.flatMap((route) => [
         [`${route.key}_label`, route.label],
@@ -1156,10 +1298,12 @@ const getPricingSettings = async (env) => {
     };
     const label = String(map.get(`${route.key}_label`) || route.label).trim();
     const price = Number.parseFloat(map.get(`${route.key}_price`) || `${route.price}`);
+    const imageUrl = normalizeRouteImage(map.get(`${route.key}_image_url`) || route.image_url || '');
     return {
       key: route.key,
       label: label || route.label,
-      price: Number.isFinite(price) && price > 0 ? price : route.price
+      price: Number.isFinite(price) && price > 0 ? price : route.price,
+      image_url: imageUrl
     };
   });
   const adminEmails = normalizeAdminEmails(
@@ -1168,11 +1312,13 @@ const getPricingSettings = async (env) => {
   const driverEmails = normalizeAdminEmails(
     map.get('driver_emails') || env.DRIVER_EMAILS || ''
   );
+  const promoCodes = normalizePromoCodes(map.get('promo_codes') || JSON.stringify(DEFAULT_PROMO_CODES));
   return {
     hourlyRate: Number.isFinite(hourlyRate) && hourlyRate > 0 ? hourlyRate : DEFAULT_HOURLY_RATE,
     serviceTypes,
     defaultServiceType: serviceTypes.includes(defaultServiceType) ? defaultServiceType : serviceTypes[0],
     featuredRoutes,
+    promoCodes,
     adminEmails,
     driverEmails
   };
@@ -1662,15 +1808,124 @@ const normalizePromoCode = (value) =>
     .toUpperCase()
     .replace(/\s+/g, '');
 
-const calculatePromoDiscountCents = ({ promoCode, subtotalCents, isNativeAppClient }) => {
+const routeMatchAliases = (match) => {
+  const normalized = String(match || '').trim().toUpperCase();
+  if (!normalized) return [];
+  if (normalized === 'LAX') {
+    return ['LAX', 'LOS ANGELES INTERNATIONAL AIRPORT', '90045'];
+  }
+  if (normalized === 'SNA') {
+    return ['18601 AIRPORT WAY, SANTA ANA, CA 92707'];
+  }
+  return [normalized];
+};
+
+const destinationMatchesPromo = (promo, destinationText) => {
+  const text = String(destinationText || '').toUpperCase();
+  const aliases = routeMatchAliases(promo?.route_match);
+  return !aliases.length || aliases.some((alias) => text.includes(alias));
+};
+
+const addressMatchesPromoValue = (actualText, expectedText) => {
+  const expected = String(expectedText || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  if (!expected) return true;
+  const actual = String(actualText || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  return actual.includes(expected);
+};
+
+const pickupCityMatchesPromo = (promo, pickupText) => {
+  const cities = normalizePromoCities(promo?.pickup_cities);
+  if (!cities.length) return true;
+  const actual = String(pickupText || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  return cities.some((city) => actual.includes(city.toUpperCase().replace(/\s+/g, ' ')));
+};
+
+const roundTripMatchesPromo = (promo, bookingMode = '', roundTripText = '') => {
+  const text = String(roundTripText || '').trim();
+  if (promo?.round_trip_only && (bookingMode !== 'hourly' || !text)) return false;
+  return addressMatchesPromoValue(text, promo?.round_trip_pickup_match) &&
+    addressMatchesPromoValue(text, promo?.round_trip_dropoff_match);
+};
+
+const addressPairMatchesPromo = (promo, pickupText, destinationText, bookingMode = '', roundTripText = '') =>
+  pickupCityMatchesPromo(promo, pickupText) &&
+  addressMatchesPromoValue(pickupText, promo?.pickup_match) &&
+  addressMatchesPromoValue(destinationText, promo?.dropoff_match) &&
+  roundTripMatchesPromo(promo, bookingMode, roundTripText);
+
+const pickupMatchesAirportPromo = (pickupText) => {
+  const text = String(pickupText || '').toUpperCase();
+  return text.includes('CORONA') || text.includes('RIVERSIDE');
+};
+
+const destinationMatches99Sna = (destinationText) => {
+  const text = String(destinationText || '').toUpperCase().replace(/\s+/g, ' ');
+  return text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707');
+};
+
+const pickupMatchesSnaAirport = (pickupText) => {
+  const text = String(pickupText || '').toUpperCase().replace(/\s+/g, ' ');
+  return text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707');
+};
+
+const destinationMatchesDisneyland = (destinationText) => {
+  const text = String(destinationText || '').toUpperCase().replace(/\s+/g, ' ');
+  return text.includes('1313 DISNEYLAND DR') && text.includes('ANAHEIM') && text.includes('92802');
+};
+
+const calculateAutomaticRouteDiscountCents = ({ subtotalCents, pickupText = '', destinationText = '' }) => {
+  const subtotal = Math.max(0, Number(subtotalCents || 0));
+  if (!subtotal || !pickupMatchesSnaAirport(pickupText) || !destinationMatchesDisneyland(destinationText)) return 0;
+  return Math.max(0, subtotal - 7500);
+};
+
+const calculatePromoDiscountCents = ({ promoCode, subtotalCents, promoCodes = DEFAULT_PROMO_CODES, pickupText = '', destinationText = '', bookingMode = '', roundTripText = '' }) => {
   const normalizedCode = normalizePromoCode(promoCode);
   const subtotal = Math.max(0, Number(subtotalCents || 0));
   if (!normalizedCode || !subtotal) {
     return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
   }
 
-  if (isNativeAppClient && normalizedCode === '10OFF') {
-    const discountCents = Math.round(subtotal * 0.10);
+  const promo = normalizePromoCodes(promoCodes).find((candidate) => candidate.code === normalizedCode);
+  if (promo?.type === 'fixed_route_total') {
+    if (!addressPairMatchesPromo(promo, pickupText, destinationText, bookingMode, roundTripText)) {
+      return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
+    }
+    if ((normalizedCode === '149LAX' || normalizedCode === '99SNA') && !pickupMatchesAirportPromo(pickupText)) {
+      return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
+    }
+    if (normalizedCode === '99SNA' && !destinationMatches99Sna(destinationText)) {
+      return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
+    }
+    if (!destinationMatchesPromo(promo, destinationText)) {
+      return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
+    }
+    const fixedTotal = Math.max(0, Number(promo.amount_cents || 0));
+    const discountCents = Math.max(0, subtotal - fixedTotal);
+    return {
+      promoCode: normalizedCode,
+      discountCents,
+      totalCents: Math.max(0, subtotal - discountCents)
+    };
+  }
+
+  if (promo?.type === 'fixed_discount') {
+    if (!addressPairMatchesPromo(promo, pickupText, destinationText, bookingMode, roundTripText)) {
+      return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
+    }
+    const discountCents = Math.min(subtotal, Math.max(0, Number(promo.amount_cents || 0)));
+    return {
+      promoCode: normalizedCode,
+      discountCents,
+      totalCents: Math.max(0, subtotal - discountCents)
+    };
+  }
+
+  if (promo?.type === 'percent') {
+    if (!addressPairMatchesPromo(promo, pickupText, destinationText, bookingMode, roundTripText)) {
+      return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
+    }
+    const discountCents = Math.round(subtotal * (promo.percent / 100));
     return {
       promoCode: normalizedCode,
       discountCents,
@@ -1679,6 +1934,20 @@ const calculatePromoDiscountCents = ({ promoCode, subtotalCents, isNativeAppClie
   }
 
   return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
+};
+
+const normalizeGratuityPercent = (value) => {
+  const percent = Number.parseInt(String(value || '').trim(), 10);
+  return Number.isFinite(percent) && percent >= 0 && percent <= 100 ? percent : 0;
+};
+
+const calculateGratuityCents = ({ subtotalCents, gratuityPercent }) => {
+  const subtotal = Math.max(0, Number(subtotalCents || 0));
+  const percent = normalizeGratuityPercent(gratuityPercent);
+  return {
+    gratuityPercent: percent,
+    gratuityCents: Math.round(subtotal * (percent / 100))
+  };
 };
 
 const customerNameFromAuthPayload = (payload) => {
@@ -3119,6 +3388,8 @@ const serializeAdminBooking = (booking) => ({
   service_type: booking.service_type || DEFAULT_SERVICE_TYPE,
   estimated_hours: booking.estimated_hours || '',
   estimated_total_cents: Number(booking.estimated_total_cents || 0),
+  gratuity_percent: Number(booking.gratuity_percent || 0),
+  gratuity_cents: Number(booking.gratuity_cents || 0),
   payment_status: booking.payment_status || '',
   driver_status: booking.driver_status || '',
   display_status: humanizeStatus(resolveBookingStatus(booking)),
@@ -3267,6 +3538,14 @@ const renderAdminPage = (rows, pricing = {}) => {
           </div>
           <input type="text" data-route-label value="${escapeHtml(route.label)}" />
           <input type="number" min="1" step="0.01" data-route-price value="${escapeHtml(route.price)}" />
+          <input type="hidden" data-route-image-value value="${escapeHtml(route.image_url || '')}" />
+          <input type="file" data-route-image-file accept="image/png,image/jpeg,image/webp" />
+          ${
+            route.image_url
+              ? `<img class="route-image-preview" src="${escapeHtml(route.image_url)}" alt="${escapeHtml(route.label)} promo preview" />`
+              : ''
+          }
+          <button class="mini-action" type="button" data-clear-route-image>Clear Image</button>
         </div>
       `
     )
@@ -3359,6 +3638,8 @@ const renderAdminPage = (rows, pricing = {}) => {
     .pricing-card input { width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid rgba(240,178,71,0.24); background: rgba(0,0,0,0.42); color: #f7f5f2; font-size: 0.95rem; }
     .pricing-card span { color: rgba(247,245,242,0.68); font-size: 0.82rem; line-height: 1.45; }
     .pricing-card-order { display: flex; gap: 8px; flex-wrap: wrap; }
+    .route-image-preview { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 12px; border: 1px solid rgba(240,178,71,0.22); }
+    .pricing-card input[type="file"] { color: rgba(247,245,242,0.78); font-size: 0.78rem; }
     .pricing-panel-actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
     .warning { color: rgba(240,178,71,0.8); font-size: 0.8rem; letter-spacing: 0.08em; }
     .danger { background: transparent; border: 1px solid rgba(240,178,71,0.4); color: #f0b247; padding: 8px 14px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.7rem; cursor: pointer; }
@@ -3386,6 +3667,7 @@ const renderAdminPage = (rows, pricing = {}) => {
       <button class="danger" id="download-bookings" type="button">Download CSV</button>
       <a class="danger" href="/crm" style="text-decoration:none; display:inline-flex; align-items:center;">Open CRM</a>
       <a class="danger" href="/admin/support" style="text-decoration:none; display:inline-flex; align-items:center;">Support</a>
+      <a class="danger" href="/admin/promos" style="text-decoration:none; display:inline-flex; align-items:center;">Promo Codes</a>
       <button class="danger" id="clear-bookings" type="button">Clear Bookings</button>
       <span class="warning">Warning: this permanently deletes all bookings.</span>
     </div>
@@ -3524,12 +3806,26 @@ const renderAdminPage = (rows, pricing = {}) => {
           '<button class="mini-action" type="button" data-move-route="down">Move Down</button>' +
           '</div>' +
           '<input type="text" data-route-label value="" />' +
-          '<input type="number" min="1" step="0.01" data-route-price value="" />';
+          '<input type="number" min="1" step="0.01" data-route-price value="" />' +
+          '<input type="hidden" data-route-image-value value="" />' +
+          '<input type="file" data-route-image-file accept="image/png,image/jpeg,image/webp" />' +
+          '<button class="mini-action" type="button" data-clear-route-image>Clear Image</button>';
         pricingGrid.appendChild(wrapper);
         renumberRouteCards();
       });
     }
     document.addEventListener('click', (event) => {
+      const clearImageButton = event.target.closest('[data-clear-route-image]');
+      if (clearImageButton) {
+        const card = clearImageButton.closest('[data-route-card]');
+        const hidden = card?.querySelector('[data-route-image-value]');
+        const fileInput = card?.querySelector('[data-route-image-file]');
+        const preview = card?.querySelector('.route-image-preview');
+        if (hidden) hidden.value = '';
+        if (fileInput) fileInput.value = '';
+        if (preview) preview.remove();
+        return;
+      }
       const button = event.target.closest('[data-move-route]');
       if (!button || !pricingForm) return;
       const card = button.closest('[data-route-card]');
@@ -3543,6 +3839,38 @@ const renderAdminPage = (rows, pricing = {}) => {
       }
       renumberRouteCards();
     });
+    const routeImageToDataUrl = (file) => new Promise((resolve, reject) => {
+      if (!file) {
+        resolve('');
+        return;
+      }
+      if (!/^image\\/(png|jpe?g|webp)$/i.test(file.type || '')) {
+        reject(new Error('Use a PNG, JPG, or WebP image.'));
+        return;
+      }
+      if (file.size > 4_000_000) {
+        reject(new Error('Use an image under 4 MB.'));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const maxSide = 1400;
+          const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.74));
+        };
+        img.onerror = () => reject(new Error('Unable to read image.'));
+        img.src = String(reader.result || '');
+      };
+      reader.onerror = () => reject(new Error('Unable to read image.'));
+      reader.readAsDataURL(file);
+    });
     if (pricingForm) {
       pricingForm.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -3553,14 +3881,39 @@ const renderAdminPage = (rows, pricing = {}) => {
         payload.default_service_type = pricingForm.querySelector('select[name="default_service_type"]')?.value || '';
         const routeCards = Array.from(pricingForm.querySelectorAll('[data-route-card]'));
         payload.route_count = String(routeCards.length);
-        routeCards.forEach((card, index) => {
-          payload['route_' + (index + 1) + '_label'] = card.querySelector('[data-route-label]')?.value || '';
-          payload['route_' + (index + 1) + '_price'] = card.querySelector('[data-route-price]')?.value || '';
-        });
+        try {
+          for (let index = 0; index < routeCards.length; index += 1) {
+            const card = routeCards[index];
+            const file = card.querySelector('[data-route-image-file]')?.files?.[0] || null;
+            const existingImage = card.querySelector('[data-route-image-value]')?.value || '';
+            const nextImage = file ? await routeImageToDataUrl(file) : existingImage;
+            if (nextImage.length > 900000) {
+              throw new Error('Route promo image is too large. Use a smaller image.');
+            }
+            payload['route_' + (index + 1) + '_label'] = card.querySelector('[data-route-label]')?.value || '';
+            payload['route_' + (index + 1) + '_price'] = card.querySelector('[data-route-price]')?.value || '';
+            payload['route_' + (index + 1) + '_image_url'] = nextImage;
+          }
+        } catch (error) {
+          if (pricingStatus) pricingStatus.textContent = error.message || 'Unable to save image.';
+          return;
+        }
         if (routeCountInput) routeCountInput.value = payload.route_count;
         if (pricingStatus) pricingStatus.textContent = 'Saving...';
-        const query = new URLSearchParams(payload);
-        window.location.href = '/admin/pricing?' + query.toString();
+        try {
+          const response = await fetch('/admin/pricing', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.error || 'Unable to save pricing.');
+          }
+          window.location.href = '/admin';
+        } catch (error) {
+          if (pricingStatus) pricingStatus.textContent = error.message || 'Unable to save pricing.';
+        }
       });
     }
 
@@ -3628,6 +3981,135 @@ const renderAdminPage = (rows, pricing = {}) => {
   `;
 };
 
+const renderPromoAdminPage = (pricing = {}) => {
+  const promos = normalizePromoCodes(pricing.promoCodes || DEFAULT_PROMO_CODES);
+  const rows = promos
+    .map((promo) => {
+      const value = promo.type === 'percent'
+        ? promo.percent
+        : Number(promo.amount_cents || 0) / 100;
+      return `
+        <div class="pricing-card" data-promo-card>
+          <strong>Promo Code</strong>
+          <input type="text" data-promo-code value="${escapeHtml(promo.code)}" placeholder="CODE" />
+          <select data-promo-type>${promoTypeOptions(promo.type || 'percent')}</select>
+          <input type="number" min="0.01" step="0.01" data-promo-value value="${escapeHtml(value)}" placeholder="10" />
+          <input type="text" data-promo-cities value="${escapeHtml((promo.pickup_cities || []).join(', '))}" placeholder="Pickup cities, comma separated" />
+          <input type="text" data-promo-pickup value="${escapeHtml(promo.pickup_match || '')}" placeholder="Pickup address match, optional" />
+          <input type="text" data-promo-dropoff value="${escapeHtml(promo.dropoff_match || promo.route_match || '')}" placeholder="Dropoff address match, optional" />
+          <label class="checkbox-row"><input type="checkbox" data-promo-round-only ${promo.round_trip_only ? 'checked' : ''} /> Round trip only</label>
+          <input type="text" data-promo-round-pickup value="${escapeHtml(promo.round_trip_pickup_match || '')}" placeholder="Round-trip pickup match, optional" />
+          <input type="text" data-promo-round-dropoff value="${escapeHtml(promo.round_trip_dropoff_match || '')}" placeholder="Round-trip dropoff match, optional" />
+          <button class="mini-action" type="button" data-remove-promo>Remove</button>
+        </div>
+      `;
+    })
+    .join('');
+
+  return `
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Luxtravco Promo Codes</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0b0b0b; color: #f4ecd9; margin: 0; }
+    header { padding: 20px 32px; border-bottom: 1px solid rgba(240,178,71,0.3); }
+    h1 { margin: 0; font-size: 1.4rem; letter-spacing: 0.12em; text-transform: uppercase; }
+    main { padding: 24px 32px; }
+    .actions { display: flex; gap: 12px; margin: 16px 0; align-items: center; flex-wrap: wrap; }
+    .danger { background: transparent; border: 1px solid rgba(240,178,71,0.4); color: #f0b247; padding: 8px 14px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.7rem; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; }
+    .pricing-panel { margin: 20px 0 28px; padding: 20px; border: 1px solid rgba(240,178,71,0.18); border-radius: 18px; background: rgba(255,255,255,0.02); }
+    .pricing-header { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 14px; }
+    .pricing-panel h2 { margin: 0; font-size: 1rem; letter-spacing: 0.1em; text-transform: uppercase; color: #f0b247; }
+    .subtle, .warning { color: rgba(247,245,242,0.65); font-size: 0.8rem; }
+    .pricing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-bottom: 14px; }
+    .pricing-card { border: 1px solid rgba(240,178,71,0.16); border-radius: 16px; padding: 14px; background: rgba(0,0,0,0.22); display: grid; gap: 10px; }
+    .pricing-card strong { color: #f0b247; text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; }
+    .pricing-card input, .pricing-card select { width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid rgba(240,178,71,0.24); background: rgba(0,0,0,0.42); color: #f7f5f2; font-size: 0.95rem; box-sizing: border-box; }
+    .checkbox-row { display: flex; align-items: center; gap: 8px; color: rgba(247,245,242,0.78); font-size: 0.85rem; }
+    .checkbox-row input { width: auto; }
+    .mini-action { background: rgba(255,255,255,0.03); border: 1px solid rgba(240,178,71,0.24); color: #f7f5f2; padding: 7px 10px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.6rem; cursor: pointer; }
+    .pricing-panel-actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  </style>
+</head>
+<body>
+  <header><h1>Luxtravco Promo Codes</h1></header>
+  <main>
+    <div class="actions">
+      <a class="danger" href="/admin">Back to Admin</a>
+    </div>
+    <form class="pricing-panel" id="promo-form">
+      <div class="pricing-header">
+        <h2>Promo Codes</h2>
+        <span class="subtle">Create percentage discounts, dollars off, or fixed totals for address-to-address routes.</span>
+      </div>
+      <div class="pricing-grid" id="promo-grid">${rows}</div>
+      <div class="pricing-panel-actions">
+        <button class="danger" id="add-promo" type="button">Add Promo</button>
+        <button class="danger" type="submit">Save Promo Codes</button>
+        <span class="warning" id="promo-status">Use Round trip only and round-trip pickup/dropoff matches for return route promos.</span>
+      </div>
+    </form>
+  </main>
+  <script>
+    const form = document.getElementById('promo-form');
+    const grid = document.getElementById('promo-grid');
+    const status = document.getElementById('promo-status');
+    const typeOptions = \`${promoTypeOptions('percent')}\`;
+    const promoTemplate = () => {
+      const node = document.createElement('div');
+      node.className = 'pricing-card';
+      node.dataset.promoCard = '';
+      node.innerHTML = '<strong>Promo Code</strong><input type="text" data-promo-code placeholder="CODE" /><select data-promo-type>' + typeOptions + '</select><input type="number" min="0.01" step="0.01" data-promo-value placeholder="10" /><input type="text" data-promo-cities placeholder="Pickup cities, comma separated" /><input type="text" data-promo-pickup placeholder="Pickup address match, optional" /><input type="text" data-promo-dropoff placeholder="Dropoff address match, optional" /><label class="checkbox-row"><input type="checkbox" data-promo-round-only /> Round trip only</label><input type="text" data-promo-round-pickup placeholder="Round-trip pickup match, optional" /><input type="text" data-promo-round-dropoff placeholder="Round-trip dropoff match, optional" /><button class="mini-action" type="button" data-remove-promo>Remove</button>';
+      return node;
+    };
+    document.getElementById('add-promo')?.addEventListener('click', () => grid.appendChild(promoTemplate()));
+    grid?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-remove-promo]');
+      if (button) button.closest('[data-promo-card]')?.remove();
+    });
+    form?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const promo_codes = Array.from(grid.querySelectorAll('[data-promo-card]')).map((card) => {
+        const type = card.querySelector('[data-promo-type]')?.value || 'percent';
+        const value = Number.parseFloat(card.querySelector('[data-promo-value]')?.value || '0');
+        const promo = {
+          code: card.querySelector('[data-promo-code]')?.value || '',
+          type,
+          pickup_cities: (card.querySelector('[data-promo-cities]')?.value || '').split(/[\\n,]/).map((city) => city.trim()).filter(Boolean),
+          pickup_match: card.querySelector('[data-promo-pickup]')?.value || '',
+          dropoff_match: card.querySelector('[data-promo-dropoff]')?.value || '',
+          round_trip_only: Boolean(card.querySelector('[data-promo-round-only]')?.checked),
+          round_trip_pickup_match: card.querySelector('[data-promo-round-pickup]')?.value || '',
+          round_trip_dropoff_match: card.querySelector('[data-promo-round-dropoff]')?.value || ''
+        };
+        if (type === 'percent') promo.percent = value;
+        else promo.amount_cents = Math.round(value * 100);
+        return promo;
+      });
+      status.textContent = 'Saving...';
+      try {
+        const response = await fetch('/admin/promos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ promo_codes })
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || 'Unable to save promo codes.');
+        }
+        window.location.href = '/admin/promos';
+      } catch (error) {
+        status.textContent = error.message || 'Unable to save promo codes.';
+      }
+    });
+  </script>
+</body>
+</html>`;
+};
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -3657,6 +4139,7 @@ export default {
       url.pathname === '/admin/clear' ||
       url.pathname === '/admin/export' ||
       url.pathname === '/admin/pricing' ||
+      url.pathname === '/admin/promos' ||
       url.pathname === '/admin/admin-emails' ||
       url.pathname === '/admin/driver-accounts' ||
       url.pathname === '/admin/booking-price' ||
@@ -3761,6 +4244,100 @@ export default {
           {
             ok: false,
             error: `Unable to save customer profile: ${error?.message || 'Unknown error'}`
+          },
+          500,
+          origin
+        );
+      }
+    }
+
+    if (url.pathname === '/api/customer/delete-account') {
+      if (request.method !== 'POST' && request.method !== 'DELETE') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      const authHeader = request.headers.get('Authorization') || '';
+      const token = authHeader.startsWith('Bearer ')
+        ? authHeader.replace('Bearer ', '').trim()
+        : '';
+      if (!token) {
+        return jsonResponse({ ok: false, error: 'Missing access token' }, 401, origin);
+      }
+
+      try {
+        const authPayload = await verifySupabaseAccessToken(token);
+        if (!authPayload) {
+          return jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin);
+        }
+
+        const email = String(authPayload.email || '').trim().toLowerCase();
+        const userId = String(authPayload.sub || authPayload.user_id || '').trim();
+        if (!email && !userId) {
+          return jsonResponse({ ok: false, error: 'Customer account is missing an email.' }, 400, origin);
+        }
+
+        await ensureCrmTables(env);
+        const customerKeys = [
+          email ? `email:${email}` : '',
+          userId ? `user:${userId}` : ''
+        ].filter(Boolean);
+
+        for (const key of customerKeys) {
+          await env.DB.prepare('DELETE FROM customer_profiles WHERE customer_key = ?')
+            .bind(key)
+            .run();
+        }
+
+        await env.DB.prepare(
+          `DELETE FROM customer_profiles
+           WHERE LOWER(customer_email) = ?
+              OR customer_user_id = ?`
+        )
+          .bind(email, userId)
+          .run();
+
+        await env.DB.prepare(
+          `UPDATE bookings
+           SET customer_email = '',
+               customer_user_id = '',
+               full_name = 'Deleted customer',
+               contact_number = ''
+           WHERE LOWER(customer_email) = ?
+              OR customer_user_id = ?`
+        )
+          .bind(email, userId)
+          .run();
+
+        let authDeleted = false;
+        const serviceRoleKey = String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+        if (serviceRoleKey && userId) {
+          const deleteResponse = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+            method: 'DELETE',
+            headers: {
+              apikey: serviceRoleKey,
+              Authorization: `Bearer ${serviceRoleKey}`
+            }
+          });
+          authDeleted = deleteResponse.ok;
+          if (!deleteResponse.ok) {
+            const errorPayload = await deleteResponse.json().catch(() => null);
+            return jsonResponse(
+              {
+                ok: false,
+                error: errorPayload?.msg || errorPayload?.error || 'Unable to delete Supabase account.'
+              },
+              deleteResponse.status || 500,
+              origin
+            );
+          }
+        }
+
+        return jsonResponse({ ok: true, deleted: true, auth_deleted: authDeleted }, 200, origin);
+      } catch (error) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: `Unable to delete customer account: ${error?.message || 'Unknown error'}`
           },
           500,
           origin
@@ -4460,6 +5037,7 @@ export default {
         return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
       }
 
+      await ensureBookingColumns(env);
       const { results } = await env.DB.prepare(
         'SELECT * FROM bookings ORDER BY pickup_date ASC, pickup_time ASC, created_at DESC LIMIT 300'
       ).all();
@@ -4878,7 +5456,8 @@ export default {
         return {
           key: route.key,
           label: String(payload?.[`${route.key}_label`] || '').trim(),
-          price: Number.parseFloat(payload?.[`${route.key}_price`])
+          price: Number.parseFloat(payload?.[`${route.key}_price`]),
+          image_url: normalizeRouteImage(payload?.[`${route.key}_image_url`] || '')
         };
       });
 
@@ -4902,6 +5481,7 @@ export default {
       for (const route of featuredRoutes) {
         await setPricingSetting(env, `${route.key}_label`, route.label);
         await setPricingSetting(env, `${route.key}_price`, route.price.toFixed(2));
+        await setPricingSetting(env, `${route.key}_image_url`, route.image_url || '');
       }
       const pricing = await getPricingSettings(env);
       return jsonResponse(
@@ -4912,12 +5492,28 @@ export default {
             service_types: serviceTypes,
             default_service_type: defaultServiceType,
             featured_routes: featuredRoutes,
+            promo_codes: pricing.promoCodes,
             admin_emails: pricing.adminEmails
           }
         },
         200,
         origin
       );
+    }
+
+    if (url.pathname === '/api/admin/promos') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+      const promoCodes = normalizePromoCodes(payload?.promo_codes || []);
+      await setPricingSetting(env, 'promo_codes', JSON.stringify(promoCodes));
+      return jsonResponse({ ok: true, promo_codes: promoCodes }, 200, origin);
     }
 
     if (url.pathname === '/api/admin/admin-emails') {
@@ -5016,6 +5612,8 @@ export default {
         'booking_mode',
         'estimated_hours',
         'estimated_total_cents',
+        'gratuity_percent',
+        'gratuity_cents',
         'payment_status',
         'payment_url',
         'customer_email',
@@ -5109,11 +5707,31 @@ export default {
     }
 
     if (url.pathname === '/admin') {
+      await ensureBookingColumns(env);
       const { results } = await env.DB.prepare(
         'SELECT * FROM bookings ORDER BY id DESC LIMIT 200'
       ).all();
       const pricing = await getPricingSettings(env);
       return htmlResponse(renderAdminPage(results || [], pricing));
+    }
+
+    if (url.pathname === '/admin/promos') {
+      if (request.method === 'GET') {
+        const pricing = await getPricingSettings(env);
+        return htmlResponse(renderPromoAdminPage(pricing));
+      }
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+      const promoCodes = normalizePromoCodes(payload?.promo_codes || []);
+      await setPricingSetting(env, 'promo_codes', JSON.stringify(promoCodes));
+      return jsonResponse({ ok: true, promo_codes: promoCodes }, 200, origin);
     }
 
     if (url.pathname === '/crm') {
@@ -5136,6 +5754,7 @@ export default {
             service_types: pricing.serviceTypes,
             default_service_type: pricing.defaultServiceType,
             featured_routes: pricing.featuredRoutes,
+            promo_codes: pricing.promoCodes,
             admin_emails: pricing.adminEmails
           }
         },
@@ -5225,7 +5844,8 @@ export default {
         return {
           key: route.key,
           label,
-          price
+          price,
+          image_url: normalizeRouteImage(payload?.[`${route.key}_image_url`] || '')
         };
       });
       if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
@@ -5252,6 +5872,7 @@ export default {
       for (const route of featuredRoutes) {
         await setPricingSetting(env, `${route.key}_label`, route.label);
         await setPricingSetting(env, `${route.key}_price`, route.price.toFixed(2));
+        await setPricingSetting(env, `${route.key}_image_url`, route.image_url || '');
       }
 
       if (request.method === 'GET') {
@@ -5265,7 +5886,8 @@ export default {
             hourly_rate: hourlyRate,
             service_types: serviceTypes,
             default_service_type: defaultServiceType,
-            featured_routes: featuredRoutes
+            featured_routes: featuredRoutes,
+            promo_codes: (await getPricingSettings(env)).promoCodes
           }
         },
         200,
@@ -5590,6 +6212,7 @@ export default {
       bags,
       contact_number,
       promo_code,
+      gratuity_percent,
       turnstile_token
     } = payload || {};
 
@@ -5658,9 +6281,24 @@ export default {
     const promo = calculatePromoDiscountCents({
       promoCode: promo_code,
       subtotalCents: totalCents,
-      isNativeAppClient
+      promoCodes: pricing.promoCodes,
+      pickupText: pickup_location,
+      destinationText: [dropoff_location, parseStopsText(stops)].filter(Boolean).join(' '),
+      bookingMode: mode,
+      roundTripText: parseStopsText(stops)
     });
-    const finalTotalCents = promo.totalCents;
+    const automaticRouteDiscountCents = calculateAutomaticRouteDiscountCents({
+      subtotalCents: totalCents,
+      pickupText: pickup_location,
+      destinationText: dropoff_location
+    });
+    const discountCents = Math.max(automaticRouteDiscountCents, promo.discountCents);
+    const discountedTotalCents = Math.max(0, totalCents - discountCents);
+    const gratuity = calculateGratuityCents({
+      subtotalCents: totalCents,
+      gratuityPercent: gratuity_percent
+    });
+    const finalTotalCents = discountedTotalCents + gratuity.gratuityCents;
 
     const resolvedCustomerEmail = String(customer_email || authenticatedCustomer?.email || '').trim();
     const resolvedCustomerUserId = String(customer_user_id || authenticatedCustomer?.sub || authenticatedCustomer?.user_id || '').trim();
@@ -5684,6 +6322,8 @@ export default {
           promo_code,
           promo_discount_cents,
           original_total_cents,
+          gratuity_percent,
+          gratuity_cents,
           payment_status,
           stripe_session_id,
           payment_url,
@@ -5694,7 +6334,7 @@ export default {
           bags,
           contact_number,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           full_name,
@@ -5707,9 +6347,11 @@ export default {
           normalizedServiceType,
           String(estimatedHours?.toFixed(2) || ''),
           String(finalTotalCents),
-          promo.promoCode,
-          promo.discountCents,
+          automaticRouteDiscountCents > 0 && automaticRouteDiscountCents >= promo.discountCents ? 'SNA_DISNEYLAND_AUTO' : promo.promoCode,
+          discountCents,
           totalCents,
+          gratuity.gratuityPercent,
+          gratuity.gratuityCents,
           'pending_review',
           '',
           '',
@@ -5748,7 +6390,10 @@ export default {
         stopsText ? `Stops: ${stopsText}` : null,
         routeEstimate?.miles ? `Mileage: ${routeEstimate.miles.toFixed(1)} mi` : null,
         `Estimated time: ${estimatedHours?.toFixed(2)} hours`,
-        promo.promoCode ? `Promo: ${promo.promoCode}${promo.discountCents ? ` (-$${(promo.discountCents / 100).toFixed(2)})` : ' (not applied)'}` : null,
+        automaticRouteDiscountCents > 0 && automaticRouteDiscountCents >= promo.discountCents
+          ? `Automatic route price: SNA to Disneyland (-$${(automaticRouteDiscountCents / 100).toFixed(2)})`
+          : promo.promoCode ? `Promo: ${promo.promoCode}${promo.discountCents ? ` (-$${(promo.discountCents / 100).toFixed(2)})` : ' (not applied)'}` : null,
+        `Driver gratuity: ${gratuity.gratuityPercent}% ($${(gratuity.gratuityCents / 100).toFixed(2)})`,
         `Total: $${(finalTotalCents / 100).toFixed(2)}`,
         `Travelers: ${travelers || '—'}`,
         `Kids: ${kids || '—'}`,
@@ -5776,9 +6421,11 @@ export default {
             service_type: normalizedServiceType,
             estimated_hours: String(estimatedHours?.toFixed(2) || ''),
             estimated_total_cents: finalTotalCents,
-            promo_code: promo.promoCode,
-            promo_discount_cents: promo.discountCents,
+            promo_code: automaticRouteDiscountCents > 0 && automaticRouteDiscountCents >= promo.discountCents ? 'SNA_DISNEYLAND_AUTO' : promo.promoCode,
+            promo_discount_cents: discountCents,
             original_total_cents: totalCents,
+            gratuity_percent: gratuity.gratuityPercent,
+            gratuity_cents: gratuity.gratuityCents,
             travelers: travelers || '',
             kids: kids || '',
             bags: bags || '',

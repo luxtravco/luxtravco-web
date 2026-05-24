@@ -223,13 +223,26 @@
               </div>
             </div>
             <form class="booking-form booking-form-empire">
-              <label class="service-select-card">
-                Vehicle
-                <select name="serviceType" id="service-type-select">
-                  <option value="Executive Black SUV" selected>Executive Black SUV</option>
-                  <option value="Black Luxury Sedan">Black Luxury Sedan</option>
-                </select>
-              </label>
+              <div class="flash-sale-banner"><strong>10%</strong> OFF FLASH SALE</div>
+              <section class="vehicle-choice" aria-label="Vehicle">
+                <input type="hidden" name="serviceType" id="service-type-select" value="Executive Black SUV" />
+                <button class="vehicle-option active" type="button" data-service-type="Executive Black SUV">
+                  <img src="assets/black-suv.png" alt="" />
+                  <span class="vehicle-copy">
+                    <strong>Black SUV <span class="vehicle-capacity" aria-label="6 passengers">6 seats</span></strong>
+                    <small>Luxury Ride for 6 Passengers</small>
+                  </span>
+                  <span class="vehicle-price" data-vehicle-price="Executive Black SUV">Select route</span>
+                </button>
+                <button class="vehicle-option" type="button" data-service-type="Black Luxury Sedan">
+                  <img src="assets/black-sedan.png" alt="" />
+                  <span class="vehicle-copy">
+                    <strong>Black <span class="vehicle-capacity" aria-label="4 passengers">4 seats</span></strong>
+                    <small>Luxury Ride for 4 Passengers</small>
+                  </span>
+                  <span class="vehicle-price" data-vehicle-price="Black Luxury Sedan">Select route</span>
+                </button>
+              </section>
               <label>
                 Full Name
                 <input type="text" placeholder="Jordan Lane" name="fullName" />
@@ -250,7 +263,11 @@
                   <strong id="estimated-hours">Select locations</strong>
                 </div>
                 <div>
-                  <span>Estimated Total</span>
+                  <span>Original Price</span>
+                  <strong id="original-total" class="original-total">$0.00</strong>
+                </div>
+                <div>
+                  <span>Discounted Price</span>
                   <strong id="estimated-total">$0.00</strong>
                 </div>
               </div>
@@ -314,10 +331,40 @@
                 Contact Number
                 <input type="text" placeholder="+1 (312) 555-0198" name="contactNumber" />
               </label>
-              <label>
+              <label class="promo-code-field">
                 Promo Code
-                <input type="text" placeholder="Enter promo code" name="promoCode" autocomplete="off" />
+                <span class="promo-code-row">
+                  <input type="text" placeholder="Enter promo code" name="promoCode" autocomplete="off" />
+                  <button type="button" data-action="apply-promo">Apply</button>
+                </span>
+                <small id="promo-status">Promo code will apply to your trip estimate.</small>
               </label>
+              <fieldset class="gratuity-field">
+                <legend>Driver Gratuity Tip</legend>
+                <div class="gratuity-options">
+                  <label>
+                    <input type="radio" name="gratuityPercent" value="0" checked />
+                    <span>Cash</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="gratuityPercent" value="15" />
+                    <span>15%</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="gratuityPercent" value="25" />
+                    <span>25%</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="gratuityPercent" value="50" />
+                    <span>50%</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="gratuityPercent" value="custom" />
+                    <span>Custom</span>
+                  </label>
+                </div>
+                <input class="custom-gratuity-input" type="number" min="15" max="100" step="1" name="customGratuityPercent" placeholder="Custom tip % (min 15)" />
+              </fieldset>
               <input type="hidden" name="turnstile_token" value="" />
               <div class="turnstile-wrap"><div id="booking-turnstile"></div></div>
               <div class="action-row">

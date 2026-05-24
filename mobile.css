@@ -290,6 +290,16 @@ h2 {
   margin: 6px 0;
 }
 
+.pricing-card-promo {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid rgba(240, 178, 71, 0.18);
+  background: rgba(0, 0, 0, 0.28);
+  margin-top: 10px;
+}
+
 .booking-form {
   display: grid;
   gap: 12px;
@@ -299,6 +309,23 @@ h2 {
   overflow: hidden;
   padding: 16px;
   min-width: 0;
+}
+
+.flash-sale-banner {
+  width: 100%;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #fff;
+  color: #d31313;
+  text-align: center;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1px solid rgba(211, 19, 19, 0.35);
+}
+
+.flash-sale-banner strong {
+  font-weight: 1000;
 }
 
 .location-stack {
@@ -404,7 +431,7 @@ body.booking-hourly .hourly-only {
 
 .estimate-card {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 12px;
   padding: 14px 16px;
   border: 1px solid rgba(240, 178, 71, 0.2);
@@ -425,6 +452,82 @@ body.booking-hourly .hourly-only {
 .estimate-card strong {
   color: var(--gold);
   font-size: 1rem;
+}
+
+.estimate-card .original-total {
+  color: var(--gold);
+  text-decoration: line-through;
+  text-decoration-color: #d31313;
+  text-decoration-thickness: 3px;
+}
+
+.vehicle-choice {
+  display: grid;
+  gap: 10px;
+}
+
+.vehicle-option {
+  display: grid;
+  grid-template-columns: minmax(86px, 30%) 1fr;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 104px;
+  padding: 10px;
+  border: 1px solid rgba(240, 178, 71, 0.18);
+  border-radius: 16px;
+  background: #0b0b0b;
+  color: var(--mist);
+  text-align: left;
+}
+
+.vehicle-option.active {
+  border-color: rgba(240, 178, 71, 0.78);
+  background: linear-gradient(135deg, rgba(240, 178, 71, 0.98), rgba(190, 128, 28, 0.96));
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.22);
+  color: #171006;
+}
+
+.vehicle-option img {
+  width: 100%;
+  max-height: 86px;
+  object-fit: contain;
+}
+
+.vehicle-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vehicle-copy strong {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 1rem;
+  line-height: 1.1;
+}
+
+.vehicle-capacity {
+  color: currentColor;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.vehicle-copy small {
+  color: rgba(247, 245, 242, 0.68);
+  font-weight: 700;
+}
+
+.vehicle-option.active .vehicle-copy small {
+  color: rgba(36, 23, 8, 0.74);
+}
+
+.vehicle-price {
+  grid-column: 1 / -1;
+  color: currentColor;
+  font-size: 1rem;
+  font-weight: 900;
 }
 
 .service-select-card {
@@ -485,6 +588,96 @@ body.booking-hourly .hourly-only {
   color: var(--mist);
   width: 100%;
   min-width: 0;
+}
+
+.promo-code-field {
+  display: grid;
+  gap: 8px;
+}
+
+.promo-code-row {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(82px, 1fr);
+  gap: 8px;
+}
+
+.promo-code-row button {
+  border: 1px solid rgba(240, 178, 71, 0.3);
+  border-radius: 8px;
+  background: var(--gold);
+  color: #15100a;
+  font-weight: 900;
+}
+
+.promo-code-field small {
+  color: rgba(247, 245, 242, 0.55);
+  font-size: 0.76rem;
+}
+
+.promo-code-field.is-applied input,
+.promo-code-field.is-applied button {
+  background: linear-gradient(135deg, #f7f5f2, #d6d0c0);
+  color: #15100a;
+}
+
+.promo-code-field.is-applied small {
+  color: var(--gold);
+}
+
+.gratuity-field {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(240, 178, 71, 0.18);
+  border-radius: 12px;
+  padding: 12px;
+  margin: 0;
+}
+
+.gratuity-field legend {
+  padding: 0 6px;
+  color: rgba(247, 245, 242, 0.62);
+  font-size: 0.85rem;
+}
+
+.gratuity-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.gratuity-options label {
+  display: block;
+}
+
+.gratuity-options input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.gratuity-options span {
+  display: grid;
+  place-items: center;
+  min-height: 42px;
+  border-radius: 999px;
+  border: 1px solid rgba(240, 178, 71, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--mist);
+  font-weight: 800;
+}
+
+.gratuity-options input:checked + span {
+  background: var(--gold);
+  color: #15100a;
+  border-color: var(--gold);
+}
+
+.custom-gratuity-input {
+  display: none;
+}
+
+.gratuity-field.is-custom .custom-gratuity-input {
+  display: block;
 }
 
 .service-select-card select {
