@@ -182,6 +182,66 @@ const luxInfoGrid = (items) => `
   </table>
 `;
 
+const CHILD_SEAT_PRICE_CENTS = 1000;
+
+const validCentsOrNull = (value) => {
+  const cents = Number(value);
+  return Number.isFinite(cents) && cents >= 0 ? Math.round(cents) : null;
+};
+
+const countChildSeatsFromSummary = (value) => {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text || text.includes('0 car seats') || text === 'none' || text === 'no') {
+    return 0;
+  }
+
+  const specificMatches = [...text.matchAll(/(\d+)\s+(?:forward-facing|front-facing|booster)\s+seats?/g)];
+  const specificTotal = specificMatches.reduce((sum, match) => sum + (Number.parseInt(match[1], 10) || 0), 0);
+  if (specificTotal > 0) {
+    return specificTotal;
+  }
+
+  const genericMatches = [...text.matchAll(/(\d+)\s+(?:car\s+)?seats?/g)];
+  return genericMatches.reduce((sum, match) => sum + (Number.parseInt(match[1], 10) || 0), 0);
+};
+
+const calculateBookingAddOns = (booking = {}) => {
+  const childSeatCount = countChildSeatsFromSummary(booking.kids);
+  const childSeatPriceCents =
+    validCentsOrNull(booking.child_seat_price_cents) ?? childSeatCount * CHILD_SEAT_PRICE_CENTS;
+  const luggagePriceCents = validCentsOrNull(booking.luggage_price_cents) ?? 0;
+  const totalCents = childSeatPriceCents + luggagePriceCents;
+
+  return {
+    childSeatCount,
+    childSeatPriceCents,
+    luggagePriceCents,
+    totalCents
+  };
+};
+
+const bookingAddOnTextLines = (booking = {}) => {
+  const addOns = calculateBookingAddOns(booking);
+  return [
+    `Child seats: ${booking.kids || '—'}`,
+    `Child seat price: ${formatCurrency(addOns.childSeatPriceCents)}`,
+    `Luggage: ${booking.bags || '—'}`,
+    `Luggage price: ${formatCurrency(addOns.luggagePriceCents)}`,
+    `Add-ons total: ${formatCurrency(addOns.totalCents)}`
+  ];
+};
+
+const bookingAddOnGridItems = (booking = {}) => {
+  const addOns = calculateBookingAddOns(booking);
+  return [
+    ['Child seats', booking.kids || '—'],
+    ['Child seat price', formatCurrency(addOns.childSeatPriceCents)],
+    ['Luggage', booking.bags || '—'],
+    ['Luggage price', formatCurrency(addOns.luggagePriceCents)],
+    ['Add-ons total', formatCurrency(addOns.totalCents)]
+  ];
+};
+
 const sendApprovalEmail = async (env, booking, checkoutUrl) => {
   const to = String(booking.customer_email || '').trim();
   if (!to) {
@@ -196,6 +256,7 @@ const sendApprovalEmail = async (env, booking, checkoutUrl) => {
     `Route: ${booking.pickup_location || '—'} -> ${booking.dropoff_location || '—'}`,
     `Pickup date: ${booking.pickup_date || '—'}`,
     `Pickup time: ${booking.pickup_time || '—'}`,
+    ...bookingAddOnTextLines(booking),
     `Service total: ${total}`,
     '',
     `Pay here: ${checkoutUrl}`,
@@ -222,6 +283,7 @@ const sendApprovalEmail = async (env, booking, checkoutUrl) => {
           ['Route', `${booking.pickup_location || '—'} -> ${booking.dropoff_location || '—'}`],
           ['Pickup date', booking.pickup_date || '—'],
           ['Pickup time', booking.pickup_time || '—'],
+          ...bookingAddOnGridItems(booking),
           ['Service total', total]
         ])}
       `
@@ -252,10 +314,9 @@ const bookingDetailsLines = (booking) => [
   Number(booking.gratuity_percent || 0) > 0
     ? `Driver gratuity: ${Number(booking.gratuity_percent || 0)}% (${formatCurrency(booking.gratuity_cents || 0)})`
     : null,
+  ...bookingAddOnTextLines(booking),
   `Total paid: ${formatCurrency(booking.estimated_total_cents || 0)}`,
   `Travelers: ${booking.travelers || '—'}`,
-  `Kids: ${booking.kids || '—'}`,
-  `Bags: ${booking.bags || '—'}`,
   `Paid at: ${booking.paid_at || '—'}`,
   `Created at: ${booking.created_at || '—'}`
 ].filter(Boolean);
@@ -339,6 +400,7 @@ const sendPaymentApprovedCustomerEmail = async (env, booking) => {
     `Route: ${route}`,
     `Stops: ${parseStopsText(booking.stops || '') || 'None'}`,
     `Vehicle: ${booking.service_type || '—'}`,
+    ...bookingAddOnTextLines(booking),
     '',
     'Your driver will use these booking details for the trip.',
     'If you have any questions, reply to this email or contact info@luxtravco.com.',
@@ -363,7 +425,8 @@ const sendPaymentApprovedCustomerEmail = async (env, booking) => {
           ['Pickup time', booking.pickup_time || '—'],
           ['Route', route],
           ['Stops', parseStopsText(booking.stops || '') || 'None'],
-          ['Vehicle', booking.service_type || '—']
+          ['Vehicle', booking.service_type || '—'],
+          ...bookingAddOnGridItems(booking)
         ])}
       `
     })
@@ -371,6 +434,35 @@ const sendPaymentApprovedCustomerEmail = async (env, booking) => {
 };
 
 const sendPaymentReceivedCustomerEmail = sendPaymentApprovedCustomerEmail;
+
+const sendAccountDeletedAdminEmail = async (env, customer) => {
+  const email = String(customer?.email || '').trim().toLowerCase();
+  const userId = String(customer?.userId || '').trim();
+  const deletedAt = new Date().toISOString();
+  const lines = [
+    'A Luxtravco customer deleted their account.',
+    '',
+    `Customer email: ${email || '—'}`,
+    `Customer user ID: ${userId || '—'}`,
+    `Deleted at: ${deletedAt}`
+  ];
+
+  return sendLuxEmail(env, {
+    to: PAID_BOOKING_NOTIFY_EMAIL,
+    subject: `Luxtravco account deleted${email ? ` - ${email}` : ''}`,
+    text: lines.join('\n'),
+    html: luxEmailShell({
+      eyebrow: 'ACCOUNT DELETE',
+      title: 'Customer account deleted',
+      intro: email ? `${email} deleted their Luxtravco account.` : 'A Luxtravco customer deleted their account.',
+      body: luxInfoGrid([
+        ['Customer email', email || '—'],
+        ['Customer user ID', userId || '—'],
+        ['Deleted at', deletedAt]
+      ])
+    })
+  });
+};
 
 const sendBookingCancelledEmails = async (env, booking, policy) => {
   const customerEmail = String(booking.customer_email || '').trim();
@@ -387,6 +479,7 @@ const sendBookingCancelledEmails = async (env, booking, policy) => {
     `Pickup time: ${booking.pickup_time || '—'}`,
     `Pickup: ${booking.pickup_location || '—'}`,
     `Drop off: ${booking.dropoff_location || '—'}`,
+    ...bookingAddOnTextLines(booking),
     '',
     'If you have questions, reply to this email or contact info@luxtravco.com.',
     '',
@@ -437,7 +530,8 @@ const sendBookingCancelledEmails = async (env, booking, policy) => {
               ['Pickup date', booking.pickup_date || '—'],
               ['Pickup time', booking.pickup_time || '—'],
               ['Pickup', booking.pickup_location || '—'],
-              ['Drop off', booking.dropoff_location || '—']
+              ['Drop off', booking.dropoff_location || '—'],
+              ...bookingAddOnGridItems(booking)
             ])}
           `
         })
@@ -511,16 +605,41 @@ const DEFAULT_SERVICE_MILE_RATES = {
   'Black Luxury Sedan': 3,
   'Black Sedan': 3
 };
+const DEFAULT_SUV_MILE_RATE = 4;
+const DEFAULT_SEDAN_MILE_RATE = 3;
 const DEFAULT_FEATURED_ROUTES = [
   { key: 'route_1', label: 'LGB → Disneyland', price: 98 },
   { key: 'route_2', label: 'ONT → Palm Springs', price: 399 },
   { key: 'route_3', label: 'LAX → Palm Springs', price: 599 },
   { key: 'route_4', label: 'OC → Vegas', price: 1199 }
 ];
+const DEFAULT_SOCAL_CITIES = [
+  'Anaheim',
+  'Burbank',
+  'Carlsbad',
+  'Corona',
+  'Costa Mesa',
+  'Disneyland',
+  'Irvine',
+  'Laguna Beach',
+  'Long Beach',
+  'Los Angeles',
+  'Newport Beach',
+  'Ontario',
+  'Orange',
+  'Palm Springs',
+  'Pasadena',
+  'Riverside',
+  'San Bernardino',
+  'San Diego',
+  'Santa Ana',
+  'Temecula'
+];
 const DEFAULT_PROMO_CODES = [
   { code: '10OFF', type: 'percent', percent: 10 },
-  { code: '149LAX', type: 'fixed_route_total', amount_cents: 14900, route_match: 'LAX', pickup_cities: ['Corona', 'Riverside'] },
-  { code: '99SNA', type: 'fixed_route_total', amount_cents: 9900, route_match: 'SNA', pickup_cities: ['Corona', 'Riverside'] }
+  { code: '149LAX', type: 'fixed_route_total', amount_cents: 14900, route_match: 'LAX', pickup_cities: ['Corona', 'Riverside'], automatic: true },
+  { code: '99SNA', type: 'fixed_route_total', amount_cents: 9900, route_match: 'SNA', pickup_cities: ['Corona', 'Riverside'], automatic: true },
+  { code: 'SNA_DISNEYLAND_AUTO', type: 'fixed_route_total', amount_cents: 7500, pickup_match: 'SNA', dropoff_match: 'Disneyland', automatic: true }
 ];
 const LEGACY_FEATURED_ROUTES = [
   { key: 'route_1', label: 'LGB → Disneyland', price: 99, image_url: '' },
@@ -564,6 +683,18 @@ const normalizePromoCities = (value) => {
   }
   return cities;
 };
+const normalizeSoCalCities = (value) => {
+  const cities = normalizePromoCities(value);
+  return cities.length ? cities : [...DEFAULT_SOCAL_CITIES];
+};
+const normalizeSettingBoolean = (value, fallback = true) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (value === true || value === false) return value;
+  const text = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on', 'enabled'].includes(text)) return true;
+  if (['0', 'false', 'no', 'off', 'disabled'].includes(text)) return false;
+  return fallback;
+};
 const normalizePromoCodes = (value) => {
   let entries = [];
   if (Array.isArray(value)) {
@@ -601,6 +732,7 @@ const normalizePromoCodes = (value) => {
     const pickupMatch = String(entry?.pickup_match || entry?.pickup || '').trim();
     const dropoffMatch = String(entry?.dropoff_match || entry?.dropoff || '').trim();
     const pickupCities = normalizePromoCities(entry?.pickup_cities || entry?.pickupCities || entry?.cities || '');
+    const automatic = entry?.automatic === true || entry?.auto_apply === true || entry?.autoApply === true || String(entry?.automatic || entry?.auto_apply || '').toLowerCase() === 'true';
     const roundTripOnly = entry?.round_trip_only === true || entry?.roundTripOnly === true || String(entry?.round_trip_only || '').toLowerCase() === 'true';
     const roundTripPickupMatch = String(entry?.round_trip_pickup_match || entry?.roundTripPickupMatch || '').trim();
     const roundTripDropoffMatch = String(entry?.round_trip_dropoff_match || entry?.roundTripDropoffMatch || '').trim();
@@ -618,6 +750,7 @@ const normalizePromoCodes = (value) => {
         pickup_match: pickupMatch,
         dropoff_match: dropoffMatch,
         pickup_cities: pickupCities,
+        automatic,
         round_trip_only: roundTripOnly,
         round_trip_pickup_match: roundTripPickupMatch,
         round_trip_dropoff_match: roundTripDropoffMatch
@@ -634,6 +767,7 @@ const normalizePromoCodes = (value) => {
         pickup_match: pickupMatch,
         dropoff_match: dropoffMatch,
         pickup_cities: pickupCities,
+        automatic,
         round_trip_only: roundTripOnly,
         round_trip_pickup_match: roundTripPickupMatch,
         round_trip_dropoff_match: roundTripDropoffMatch
@@ -649,12 +783,26 @@ const normalizePromoCodes = (value) => {
       pickup_match: pickupMatch,
       dropoff_match: dropoffMatch,
       pickup_cities: pickupCities,
+      automatic,
       round_trip_only: roundTripOnly,
       round_trip_pickup_match: roundTripPickupMatch,
       round_trip_dropoff_match: roundTripDropoffMatch
     });
   }
-  return promos.length ? promos : [...DEFAULT_PROMO_CODES];
+  if (!promos.length) return [...DEFAULT_PROMO_CODES];
+  const automaticDefaults = DEFAULT_PROMO_CODES.filter((promo) => promo.automatic);
+  for (const defaultPromo of automaticDefaults) {
+    const existing = promos.find((promo) => promo.code === defaultPromo.code);
+    if (existing) {
+      if (!existing.pickup_cities?.length && defaultPromo.pickup_cities?.length) existing.pickup_cities = [...defaultPromo.pickup_cities];
+      if (!existing.pickup_match && defaultPromo.pickup_match) existing.pickup_match = defaultPromo.pickup_match;
+      if (!existing.dropoff_match && defaultPromo.dropoff_match) existing.dropoff_match = defaultPromo.dropoff_match;
+      if (!existing.route_match && defaultPromo.route_match) existing.route_match = defaultPromo.route_match;
+    } else {
+      promos.push({ ...defaultPromo });
+    }
+  }
+  return promos;
 };
 const promoCodesToTextarea = (promos) =>
   normalizePromoCodes(promos)
@@ -836,6 +984,8 @@ let crmColumnsReady;
 let adminPushTablesReady;
 let cachedApnsBearerToken;
 let cachedApnsBearerTokenExpiresAt = 0;
+let cachedFcmAccessToken;
+let cachedFcmAccessTokenExpiresAt = 0;
 const ensureCrmTables = async (env) => {
   if (crmColumnsReady) return crmColumnsReady;
 
@@ -888,10 +1038,14 @@ const ensurePricingSettings = async (env) => {
     const now = new Date().toISOString();
     const defaults = [
       ['hourly_rate', String(DEFAULT_HOURLY_RATE)],
+      ['mileage_rate_suv', String(DEFAULT_SUV_MILE_RATE)],
+      ['mileage_rate_sedan', String(DEFAULT_SEDAN_MILE_RATE)],
       ['admin_emails', String(env.ADMIN_EMAILS || DEFAULT_ADMIN_EMAILS)],
       ['driver_emails', String(env.DRIVER_EMAILS || '')],
       ['service_types', JSON.stringify(DEFAULT_SERVICE_TYPES)],
       ['default_service_type', DEFAULT_SERVICE_TYPE],
+      ['socal_service_area_enabled', 'true'],
+      ['socal_cities', DEFAULT_SOCAL_CITIES.join('\n')],
       ['promo_codes', JSON.stringify(DEFAULT_PROMO_CODES)],
       ['route_count', String(DEFAULT_FEATURED_ROUTES.length)],
       ...DEFAULT_FEATURED_ROUTES.flatMap((route) => [
@@ -975,6 +1129,30 @@ const ensureAdminPushTables = async (env) => {
   })();
 
   return adminPushTablesReady;
+};
+
+let customerPushTablesReady;
+const ensureCustomerPushTables = async (env) => {
+  if (customerPushTablesReady) return customerPushTablesReady;
+
+  customerPushTablesReady = (async () => {
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS customer_device_tokens (
+        token TEXT PRIMARY KEY,
+        user_id TEXT,
+        email TEXT,
+        platform TEXT NOT NULL DEFAULT 'ios',
+        bundle_id TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        last_registered_at TEXT NOT NULL,
+        last_notified_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`
+    ).run();
+  })();
+
+  return customerPushTablesReady;
 };
 
 const syncAdminUsersFromEmails = async (env, emails) => {
@@ -1151,6 +1329,76 @@ const getApnsBearerToken = async (env) => {
   return cachedApnsBearerToken;
 };
 
+const getFirebaseServiceAccount = (env) => {
+  if (env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    try {
+      return JSON.parse(String(env.FIREBASE_SERVICE_ACCOUNT_JSON));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  const projectId = String(env.FIREBASE_PROJECT_ID || '').trim();
+  const clientEmail = String(env.FIREBASE_CLIENT_EMAIL || '').trim();
+  const privateKey = String(env.FIREBASE_PRIVATE_KEY || '').trim();
+  if (!projectId || !clientEmail || !privateKey) return null;
+  return {
+    project_id: projectId,
+    client_email: clientEmail,
+    private_key: privateKey
+  };
+};
+
+const getFcmAccessToken = async (env) => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (cachedFcmAccessToken && nowSeconds < cachedFcmAccessTokenExpiresAt) {
+    return cachedFcmAccessToken;
+  }
+
+  const serviceAccount = getFirebaseServiceAccount(env);
+  const clientEmail = String(serviceAccount?.client_email || '').trim();
+  const privateKey = String(serviceAccount?.private_key || '').trim();
+  if (!clientEmail || !privateKey) return '';
+
+  const header = toBase64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const payload = toBase64Url(JSON.stringify({
+    iss: clientEmail,
+    scope: 'https://www.googleapis.com/auth/firebase.messaging',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: nowSeconds,
+    exp: nowSeconds + 3600
+  }));
+  const signingInput = `${header}.${payload}`;
+  const key = await crypto.subtle.importKey(
+    'pkcs8',
+    pemToArrayBuffer(privateKey),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    key,
+    new TextEncoder().encode(signingInput)
+  );
+  const assertion = `${signingInput}.${toBase64Url(signature)}`;
+
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion
+    }).toString()
+  });
+  if (!response.ok) return '';
+
+  const data = await response.json();
+  cachedFcmAccessToken = String(data?.access_token || '').trim();
+  cachedFcmAccessTokenExpiresAt = nowSeconds + Math.max(60, Number(data?.expires_in || 3600) - 120);
+  return cachedFcmAccessToken;
+};
+
 const upsertAdminPushToken = async (env, { token, userId, email, platform, bundleId }) => {
   await ensureAdminPushTables(env);
   const now = new Date().toISOString();
@@ -1183,6 +1431,43 @@ const deactivateAdminPushToken = async (env, token) => {
   await ensureAdminPushTables(env);
   await env.DB.prepare(
     'UPDATE admin_device_tokens SET is_active = 0, updated_at = ? WHERE token = ?'
+  )
+    .bind(new Date().toISOString(), token)
+    .run();
+};
+
+const upsertCustomerPushToken = async (env, { token, userId, email, platform, bundleId }) => {
+  await ensureCustomerPushTables(env);
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO customer_device_tokens (
+      token,
+      user_id,
+      email,
+      platform,
+      bundle_id,
+      is_active,
+      last_registered_at,
+      created_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+    ON CONFLICT(token) DO UPDATE SET
+      user_id = excluded.user_id,
+      email = excluded.email,
+      platform = excluded.platform,
+      bundle_id = excluded.bundle_id,
+      is_active = 1,
+      last_registered_at = excluded.last_registered_at,
+      updated_at = excluded.updated_at`
+  )
+    .bind(token, userId, email, platform, bundleId, now, now, now)
+    .run();
+};
+
+const deactivateCustomerPushToken = async (env, token) => {
+  await ensureCustomerPushTables(env);
+  await env.DB.prepare(
+    'UPDATE customer_device_tokens SET is_active = 0, updated_at = ? WHERE token = ?'
   )
     .bind(new Date().toISOString(), token)
     .run();
@@ -1267,6 +1552,190 @@ const sendAdminPushNotification = async (env, { title, body, kind = 'admin_alert
   return { ok: true, delivered };
 };
 
+const sendCustomerApnsUpdateNotification = async (env) => {
+  const topic = String(env.APNS_TOPIC_CUSTOMER || 'com.luxtravco.app').trim();
+  const bearerToken = await getApnsBearerToken(env);
+  if (!topic || !bearerToken) {
+    return { ok: true, delivered: 0, skipped: true };
+  }
+
+  await ensureCustomerPushTables(env);
+  const { results } = await env.DB.prepare(
+    `SELECT token
+     FROM customer_device_tokens
+     WHERE is_active = 1
+       AND LOWER(platform) = 'ios'
+       AND bundle_id = ?`
+  )
+    .bind(topic)
+    .all();
+
+  if (!results?.length) {
+    return { ok: true, delivered: 0 };
+  }
+
+  const appStoreURL = String(env.IOS_APP_STORE_URL || env.APP_STORE_URL || '').trim();
+  const host = String(env.APNS_USE_SANDBOX || '').trim() === '1'
+    ? 'api.sandbox.push.apple.com'
+    : 'api.push.apple.com';
+  const payload = JSON.stringify({
+    aps: {
+      alert: {
+        title: 'Luxtravco update available',
+        body: 'Please update Luxtravco from the App Store for the latest fixes and features.'
+      },
+      sound: 'default'
+    },
+    kind: 'app_update_available',
+    app_store_url: appStoreURL
+  });
+  const now = new Date().toISOString();
+  let delivered = 0;
+
+  for (const row of results) {
+    const token = String(row.token || '').trim();
+    if (!token) continue;
+    try {
+      const response = await fetch(`https://${host}/3/device/${token}`, {
+        method: 'POST',
+        headers: {
+          authorization: `bearer ${bearerToken}`,
+          'apns-topic': topic,
+          'apns-push-type': 'alert',
+          'apns-priority': '10'
+        },
+        body: payload
+      });
+
+      if (response.ok) {
+        delivered += 1;
+        await env.DB.prepare(
+          'UPDATE customer_device_tokens SET last_notified_at = ?, updated_at = ? WHERE token = ?'
+        )
+          .bind(now, now, token)
+          .run();
+        continue;
+      }
+
+      let reason = '';
+      try {
+        const json = await response.json();
+        reason = String(json?.reason || '').trim();
+      } catch (error) {
+        reason = '';
+      }
+      if (response.status === 410 || reason === 'Unregistered' || reason === 'BadDeviceToken') {
+        await deactivateCustomerPushToken(env, token);
+      }
+    } catch (error) {
+      // Continue broadcasting to other devices.
+    }
+  }
+
+  return { ok: true, delivered };
+};
+
+const sendCustomerFcmUpdateNotification = async (env) => {
+  const serviceAccount = getFirebaseServiceAccount(env);
+  const projectId = String(env.FIREBASE_PROJECT_ID || serviceAccount?.project_id || '').trim();
+  const bearerToken = await getFcmAccessToken(env);
+  if (!projectId || !bearerToken) {
+    return { ok: true, delivered: 0, skipped: true };
+  }
+
+  await ensureCustomerPushTables(env);
+  const { results } = await env.DB.prepare(
+    `SELECT token
+     FROM customer_device_tokens
+     WHERE is_active = 1
+       AND LOWER(platform) = 'android'`
+  ).all();
+
+  if (!results?.length) {
+    return { ok: true, delivered: 0 };
+  }
+
+  const appStoreURL = String(env.ANDROID_PLAY_STORE_URL || env.PLAY_STORE_URL || env.APP_STORE_URL || '').trim();
+  const now = new Date().toISOString();
+  let delivered = 0;
+
+  for (const row of results) {
+    const token = String(row.token || '').trim();
+    if (!token) continue;
+    try {
+      const response = await fetch(`https://fcm.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/messages:send`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          message: {
+            token,
+            notification: {
+              title: 'Luxtravco update available',
+              body: 'Please update Luxtravco from the app store for the latest fixes and features.'
+            },
+            data: {
+              kind: 'app_update_available',
+              app_store_url: appStoreURL
+            },
+            android: {
+              priority: 'HIGH',
+              notification: {
+                channel_id: 'luxtravco_updates',
+                sound: 'default'
+              }
+            }
+          }
+        })
+      });
+
+      if (response.ok) {
+        delivered += 1;
+        await env.DB.prepare(
+          'UPDATE customer_device_tokens SET last_notified_at = ?, updated_at = ? WHERE token = ?'
+        )
+          .bind(now, now, token)
+          .run();
+        continue;
+      }
+
+      let errorStatus = '';
+      try {
+        const json = await response.json();
+        errorStatus = String(json?.error?.status || json?.error?.message || '').trim();
+      } catch (error) {
+        errorStatus = '';
+      }
+      if (response.status === 404 || response.status === 400 || /UNREGISTERED|INVALID_ARGUMENT/i.test(errorStatus)) {
+        await deactivateCustomerPushToken(env, token);
+      }
+    } catch (error) {
+      // Continue broadcasting to other devices.
+    }
+  }
+
+  return { ok: true, delivered };
+};
+
+const sendCustomerUpdateNotification = async (env) => {
+  const [ios, android] = await Promise.all([
+    sendCustomerApnsUpdateNotification(env),
+    sendCustomerFcmUpdateNotification(env)
+  ]);
+  const delivered = (ios.delivered || 0) + (android.delivered || 0);
+  if (ios.skipped && android.skipped) {
+    return { ok: false, skipped: true, error: 'APNs and FCM are not configured' };
+  }
+  return {
+    ok: true,
+    delivered,
+    ios_delivered: ios.delivered || 0,
+    android_delivered: android.delivered || 0
+  };
+};
+
 const getPricingSettings = async (env) => {
   await ensurePricingSettings(env);
   const { results } = await env.DB.prepare(
@@ -1274,6 +1743,8 @@ const getPricingSettings = async (env) => {
   ).all();
   const map = new Map((results || []).map((row) => [row.setting_key, row.setting_value]));
   const hourlyRate = Number.parseFloat(map.get('hourly_rate') || `${DEFAULT_HOURLY_RATE}`);
+  const mileageRateSuv = Number.parseFloat(map.get('mileage_rate_suv') || `${DEFAULT_SUV_MILE_RATE}`);
+  const mileageRateSedan = Number.parseFloat(map.get('mileage_rate_sedan') || `${DEFAULT_SEDAN_MILE_RATE}`);
   const serviceTypes = normalizeServiceTypes(
     (() => {
       const raw = map.get('service_types');
@@ -1313,11 +1784,23 @@ const getPricingSettings = async (env) => {
     map.get('driver_emails') || env.DRIVER_EMAILS || ''
   );
   const promoCodes = normalizePromoCodes(map.get('promo_codes') || JSON.stringify(DEFAULT_PROMO_CODES));
+  const socalCities = normalizeSoCalCities(map.get('socal_cities') || DEFAULT_SOCAL_CITIES.join('\n'));
+  const socalServiceAreaEnabled = normalizeSettingBoolean(map.get('socal_service_area_enabled'), true);
   return {
     hourlyRate: Number.isFinite(hourlyRate) && hourlyRate > 0 ? hourlyRate : DEFAULT_HOURLY_RATE,
+    mileageRateSuv: Number.isFinite(mileageRateSuv) && mileageRateSuv > 0 ? mileageRateSuv : DEFAULT_SUV_MILE_RATE,
+    mileageRateSedan: Number.isFinite(mileageRateSedan) && mileageRateSedan > 0 ? mileageRateSedan : DEFAULT_SEDAN_MILE_RATE,
+    serviceMileRates: serviceTypes.reduce((rates, serviceType) => {
+      rates[serviceType] = serviceType.toLowerCase().includes('sedan')
+        ? (Number.isFinite(mileageRateSedan) && mileageRateSedan > 0 ? mileageRateSedan : DEFAULT_SEDAN_MILE_RATE)
+        : (Number.isFinite(mileageRateSuv) && mileageRateSuv > 0 ? mileageRateSuv : DEFAULT_SUV_MILE_RATE);
+      return rates;
+    }, {}),
     serviceTypes,
     defaultServiceType: serviceTypes.includes(defaultServiceType) ? defaultServiceType : serviceTypes[0],
     featuredRoutes,
+    socalServiceAreaEnabled,
+    socalCities,
     promoCodes,
     adminEmails,
     driverEmails
@@ -1338,31 +1821,49 @@ const setPricingSetting = async (env, settingKey, value) => {
     .run();
 };
 
+const setPricingSettings = async (env, entries) => {
+  await ensurePricingSettings(env);
+  const now = new Date().toISOString();
+  const statement = env.DB.prepare(
+    `INSERT INTO pricing_settings (setting_key, setting_value, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(setting_key) DO UPDATE SET
+       setting_value = excluded.setting_value,
+       updated_at = excluded.updated_at`
+  );
+  await env.DB.batch(
+    entries.map(([settingKey, value]) => statement.bind(settingKey, String(value), now))
+  );
+};
+
 const calcHourlyTotalCents = (hoursValue, hourlyRate = DEFAULT_HOURLY_RATE) => {
   const hours = Number.parseFloat(hoursValue);
   if (!Number.isFinite(hours) || hours <= 0) return null;
   return Math.round(hourlyRate * hours * 100);
 };
 
-const serviceMileRate = (serviceType) => {
+const serviceMileRate = (serviceType, mileRates = null) => {
   const normalized = String(serviceType || '').trim();
+  if (mileRates && Number.isFinite(Number(mileRates[normalized])) && Number(mileRates[normalized]) > 0) {
+    return Number(mileRates[normalized]);
+  }
   if (DEFAULT_SERVICE_MILE_RATES[normalized]) {
     return DEFAULT_SERVICE_MILE_RATES[normalized];
   }
   const lower = normalized.toLowerCase();
-  if (lower.includes('sedan')) return 3;
-  if (lower.includes('suv')) return 4;
+  if (lower.includes('sedan')) return DEFAULT_SEDAN_MILE_RATE;
+  if (lower.includes('suv')) return DEFAULT_SUV_MILE_RATE;
   if (lower.includes('sprinter') || lower.includes('van')) return 5;
-  return 4;
+  return DEFAULT_SUV_MILE_RATE;
 };
 
-const calcTimeAndMileageTotalCents = (hoursValue, milesValue, hourlyRate, serviceType) => {
+const calcTimeAndMileageTotalCents = (hoursValue, milesValue, hourlyRate, serviceType, mileRates = null) => {
   const hours = Number.parseFloat(hoursValue);
   const miles = Number.parseFloat(milesValue);
   const rate = Number.parseFloat(hourlyRate);
   if (!Number.isFinite(hours) || hours <= 0 || !Number.isFinite(rate) || rate <= 0) return null;
   if (!Number.isFinite(miles) || miles <= 0) return null;
-  return Math.round((hours * rate + miles * serviceMileRate(serviceType)) * 100);
+  return Math.round((hours * rate + miles * serviceMileRate(serviceType, mileRates)) * 100);
 };
 
 const losAngelesFormatter = new Intl.DateTimeFormat('en-CA', {
@@ -1500,7 +2001,72 @@ const normalizeRoutePoints = (points) =>
         .filter((point) => point.value && Number.isFinite(point.lat) && Number.isFinite(point.lng))
     : [];
 
+const SOUTHERN_CALIFORNIA_BOUNDS = {
+  minLat: 32.45,
+  maxLat: 35.85,
+  minLng: -121.0,
+  maxLng: -114.0
+};
+
+const isPointInSouthernCalifornia = (point) =>
+  Number.isFinite(point?.lat) &&
+  Number.isFinite(point?.lng) &&
+  point.lat >= SOUTHERN_CALIFORNIA_BOUNDS.minLat &&
+  point.lat <= SOUTHERN_CALIFORNIA_BOUNDS.maxLat &&
+  point.lng >= SOUTHERN_CALIFORNIA_BOUNDS.minLng &&
+  point.lng <= SOUTHERN_CALIFORNIA_BOUNDS.maxLng;
+
+const normalizeCitySearchText = (value) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const pointMatchesSoCalCity = (point, allowedCities) => {
+  const text = ` ${normalizeCitySearchText([point?.name, point?.label, point?.value].join(' '))} `;
+  return normalizeSoCalCities(allowedCities).some((city) => {
+    const cityText = normalizeCitySearchText(city);
+    return cityText && text.includes(` ${cityText} `);
+  });
+};
+
+const validateSouthernCaliforniaRoute = (points, allowedCities = DEFAULT_SOCAL_CITIES, serviceAreaEnabled = true) => {
+  const routePoints = normalizeRoutePoints(points);
+  if (routePoints.length < 2) {
+    return {
+      ok: false,
+      error: 'Select valid pickup and drop off locations.'
+    };
+  }
+  if (!serviceAreaEnabled) {
+    return { ok: true, routePoints };
+  }
+  const outsidePoint = routePoints.find((point) => !isPointInSouthernCalifornia(point));
+  if (outsidePoint) {
+    return {
+      ok: false,
+      error: 'Luxtravco bookings are currently limited to Southern California.'
+    };
+  }
+  const outsideConfiguredCities = routePoints.find((point) => !pointMatchesSoCalCity(point, allowedCities));
+  if (outsideConfiguredCities) {
+    return {
+      ok: false,
+      error: 'Luxtravco bookings are currently limited to the configured Southern California service cities.'
+    };
+  }
+  return { ok: true, routePoints };
+};
+
 const normalizeProvidedRouteEstimate = (payload) => {
+  if (
+    String(payload?.booking_mode || '').trim() === 'hourly' &&
+    String(payload?.route_pricing_mode || '').trim() !== 'billable_legs'
+  ) {
+    return null;
+  }
   const miles = Number.parseFloat(payload?.route_miles);
   const seconds = Number.parseFloat(payload?.route_seconds);
   if (!Number.isFinite(miles) || miles <= 0 || !Number.isFinite(seconds) || seconds <= 0) {
@@ -1519,12 +2085,21 @@ const calculateRouteEstimate = (points, payload = null) => {
   const routePoints = normalizeRoutePoints(points);
   if (routePoints.length < 2) return null;
 
+  const isRoundTrip = String(payload?.booking_mode || '').trim() === 'hourly';
+  const billablePairs = isRoundTrip
+    ? Array.from({ length: Math.floor(routePoints.length / 2) }, (_, index) => [
+        routePoints[index * 2],
+        routePoints[index * 2 + 1]
+      ]).filter(([pickup, dropoff]) => pickup && dropoff)
+    : routePoints.slice(0, -1).map((point, index) => [point, routePoints[index + 1]]);
+  if (!billablePairs.length) return null;
+
   let miles = 0;
-  for (let index = 0; index < routePoints.length - 1; index += 1) {
-    miles += haversineMiles(routePoints[index], routePoints[index + 1]);
+  for (const [pickup, dropoff] of billablePairs) {
+    miles += haversineMiles(pickup, dropoff);
   }
 
-  const stopCount = Math.max(0, routePoints.length - 2);
+  const stopCount = isRoundTrip ? Math.max(0, billablePairs.length - 1) : Math.max(0, routePoints.length - 2);
   const drivingMinutes = (miles / 28) * 60 * 1.28;
   const totalMinutes = drivingMinutes + 18 + stopCount * 8;
   return {
@@ -1808,69 +2383,92 @@ const normalizePromoCode = (value) =>
     .toUpperCase()
     .replace(/\s+/g, '');
 
+const normalizeLocationText = (value) =>
+  String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 const routeMatchAliases = (match) => {
-  const normalized = String(match || '').trim().toUpperCase();
+  const normalized = normalizeLocationText(match);
   if (!normalized) return [];
-  if (normalized === 'LAX') {
-    return ['LAX', 'LOS ANGELES INTERNATIONAL AIRPORT', '90045'];
+  if (normalized === 'LAX' || normalized.includes('LOS ANGELES INTERNATIONAL AIRPORT') || normalized.includes('1 WORLD WAY') || normalized.includes('90045')) {
+    return ['LAX', 'LOS ANGELES INTERNATIONAL AIRPORT', '1 WORLD WAY', '90045'];
   }
-  if (normalized === 'SNA') {
-    return ['18601 AIRPORT WAY, SANTA ANA, CA 92707'];
+  if (normalized === 'SNA' || normalized.includes('JOHN WAYNE AIRPORT') || normalized.includes('SANTA ANA AIRPORT') || normalized.includes('ORANGE COUNTY AIRPORT') || normalized.includes('18601 AIRPORT WAY') || normalized.includes('92707')) {
+    return ['SNA', 'JOHN WAYNE AIRPORT', 'SANTA ANA AIRPORT', 'ORANGE COUNTY AIRPORT', '18601 AIRPORT WAY', '92707'];
+  }
+  if (normalized === 'DISNEYLAND' || normalized.includes('DISNEYLAND PARK') || normalized.includes('1313 DISNEYLAND') || normalized.includes('92802')) {
+    return ['DISNEYLAND', 'DISNEYLAND PARK', '1313 DISNEYLAND DR', '92802'];
   }
   return [normalized];
 };
 
 const destinationMatchesPromo = (promo, destinationText) => {
-  const text = String(destinationText || '').toUpperCase();
-  const aliases = routeMatchAliases(promo?.route_match);
+  const text = normalizeLocationText(destinationText);
+  const aliases = routeMatchAliases(promo?.route_match).map(normalizeLocationText);
   return !aliases.length || aliases.some((alias) => text.includes(alias));
 };
 
 const addressMatchesPromoValue = (actualText, expectedText) => {
-  const expected = String(expectedText || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  const expected = normalizeLocationText(expectedText);
   if (!expected) return true;
-  const actual = String(actualText || '').trim().toUpperCase().replace(/\s+/g, ' ');
-  return actual.includes(expected);
+  const actual = normalizeLocationText(actualText);
+  const aliases = [expected, ...routeMatchAliases(expectedText).map(normalizeLocationText)];
+  if (aliases.some((alias) => alias && actual.includes(alias))) return true;
+  const expectedTokens = expected.split(' ').filter((token) => token.length > 2 && !['THE', 'AND', 'WAY', 'DR', 'AVE', 'ST', 'CA', 'USA'].includes(token));
+  return expectedTokens.length > 0 && expectedTokens.every((token) => actual.includes(token));
 };
 
 const pickupCityMatchesPromo = (promo, pickupText) => {
   const cities = normalizePromoCities(promo?.pickup_cities);
   if (!cities.length) return true;
-  const actual = String(pickupText || '').trim().toUpperCase().replace(/\s+/g, ' ');
-  return cities.some((city) => actual.includes(city.toUpperCase().replace(/\s+/g, ' ')));
+  const actual = normalizeLocationText(pickupText);
+  return cities.some((city) => actual.includes(normalizeLocationText(city)));
 };
 
 const roundTripMatchesPromo = (promo, bookingMode = '', roundTripText = '') => {
   const text = String(roundTripText || '').trim();
+  if (bookingMode !== 'hourly') return promo?.round_trip_only !== true;
   if (promo?.round_trip_only && (bookingMode !== 'hourly' || !text)) return false;
   return addressMatchesPromoValue(text, promo?.round_trip_pickup_match) &&
     addressMatchesPromoValue(text, promo?.round_trip_dropoff_match);
 };
 
+const promoCanApplyToBookingMode = (promo, bookingMode = '') =>
+  bookingMode !== 'hourly' || promo?.round_trip_only === true;
+
 const addressPairMatchesPromo = (promo, pickupText, destinationText, bookingMode = '', roundTripText = '') =>
+  promoCanApplyToBookingMode(promo, bookingMode) &&
   pickupCityMatchesPromo(promo, pickupText) &&
   addressMatchesPromoValue(pickupText, promo?.pickup_match) &&
   addressMatchesPromoValue(destinationText, promo?.dropoff_match) &&
   roundTripMatchesPromo(promo, bookingMode, roundTripText);
 
 const pickupMatchesAirportPromo = (pickupText) => {
-  const text = String(pickupText || '').toUpperCase();
+  const text = normalizeLocationText(pickupText);
   return text.includes('CORONA') || text.includes('RIVERSIDE');
 };
 
 const destinationMatches99Sna = (destinationText) => {
-  const text = String(destinationText || '').toUpperCase().replace(/\s+/g, ' ');
-  return text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707');
+  const text = normalizeLocationText(destinationText);
+  return (text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707')) ||
+    text.includes('JOHN WAYNE AIRPORT') ||
+    text.includes('SNA');
 };
 
 const pickupMatchesSnaAirport = (pickupText) => {
-  const text = String(pickupText || '').toUpperCase().replace(/\s+/g, ' ');
-  return text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707');
+  const text = normalizeLocationText(pickupText);
+  return (text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707')) ||
+    text.includes('JOHN WAYNE AIRPORT') ||
+    text.includes('SNA');
 };
 
 const destinationMatchesDisneyland = (destinationText) => {
-  const text = String(destinationText || '').toUpperCase().replace(/\s+/g, ' ');
-  return text.includes('1313 DISNEYLAND DR') && text.includes('ANAHEIM') && text.includes('92802');
+  const text = normalizeLocationText(destinationText);
+  return (text.includes('1313 DISNEYLAND DR') && text.includes('ANAHEIM') && text.includes('92802')) ||
+    text.includes('DISNEYLAND PARK');
 };
 
 const calculateAutomaticRouteDiscountCents = ({ subtotalCents, pickupText = '', destinationText = '' }) => {
@@ -1887,6 +2485,9 @@ const calculatePromoDiscountCents = ({ promoCode, subtotalCents, promoCodes = DE
   }
 
   const promo = normalizePromoCodes(promoCodes).find((candidate) => candidate.code === normalizedCode);
+  if (!promoCanApplyToBookingMode(promo, bookingMode)) {
+    return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
+  }
   if (promo?.type === 'fixed_route_total') {
     if (!addressPairMatchesPromo(promo, pickupText, destinationText, bookingMode, roundTripText)) {
       return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
@@ -1934,6 +2535,38 @@ const calculatePromoDiscountCents = ({ promoCode, subtotalCents, promoCodes = DE
   }
 
   return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
+};
+
+const calculateAutomaticPromoDiscountCents = ({ subtotalCents, promoCodes = DEFAULT_PROMO_CODES, pickupText = '', destinationText = '', bookingMode = '', roundTripText = '' }) => {
+  const subtotal = Math.max(0, Number(subtotalCents || 0));
+  if (!subtotal) return { promoCode: '', discountCents: 0, totalCents: subtotal };
+  const automaticPromos = normalizePromoCodes(promoCodes).filter((promo) => promo.automatic && promoCanApplyToBookingMode(promo, bookingMode));
+  const best = automaticPromos.reduce(
+    (winner, promo) => {
+      const result = calculatePromoDiscountCents({
+        promoCode: promo.code,
+        subtotalCents: subtotal,
+        promoCodes: automaticPromos,
+        pickupText,
+        destinationText,
+        bookingMode,
+        roundTripText
+      });
+      return result.discountCents > winner.discountCents ? result : winner;
+    },
+    { promoCode: '', discountCents: 0, totalCents: subtotal }
+  );
+  const legacyRouteDiscount = bookingMode === 'hourly'
+    ? 0
+    : calculateAutomaticRouteDiscountCents({ subtotalCents: subtotal, pickupText, destinationText });
+  if (legacyRouteDiscount > best.discountCents) {
+    return {
+      promoCode: 'SNA_DISNEYLAND_AUTO',
+      discountCents: legacyRouteDiscount,
+      totalCents: Math.max(0, subtotal - legacyRouteDiscount)
+    };
+  }
+  return best;
 };
 
 const normalizeGratuityPercent = (value) => {
@@ -3074,6 +3707,7 @@ const sendBookingReminderEmail = async (env, booking, reminderType) => {
     `Pickup date: ${pickupDate}`,
     `Pickup time: ${pickupTime}`,
     `Route: ${route}`,
+    ...bookingAddOnTextLines(booking),
     '',
     'If anything changes, reply to this email or contact info@luxtravco.com.',
     '',
@@ -3093,7 +3727,8 @@ const sendBookingReminderEmail = async (env, booking, reminderType) => {
         ${luxInfoGrid([
           ['Pickup date', pickupDate],
           ['Pickup time', pickupTime],
-          ['Route', route]
+          ['Route', route],
+          ...bookingAddOnGridItems(booking)
         ])}
       `
     })
@@ -3411,6 +4046,8 @@ const serializeDriverTrip = (booking) => ({
   status: humanizeStatus(resolveBookingStatus(booking)),
   phone: booking.contact_number || '',
   total: formatCurrency(booking.estimated_total_cents || 0),
+  childSeats: booking.kids || '',
+  luggage: booking.bags || '',
   note: parseStopsText(booking.stops || '') || (booking.booking_mode === 'hourly' ? 'Hourly booking' : 'Transfer booking')
 });
 
@@ -3512,12 +4149,97 @@ const requireDriverApiAuth = async (request, env, origin) => {
   }
 };
 
+const renderServiceAreaPage = (pricing = {}) => {
+  const socalCitiesValue = normalizeSoCalCities(pricing.socalCities).join('\n');
+  const serviceAreaEnabled = pricing.socalServiceAreaEnabled !== false;
+  return `
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Luxtravco Service Area</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0b0b0b; color: #f4ecd9; margin: 0; }
+    header { padding: 20px 32px; border-bottom: 1px solid rgba(240,178,71,0.3); display:flex; justify-content:space-between; gap:14px; align-items:center; flex-wrap:wrap; }
+    h1 { margin: 0; font-size: 1.4rem; letter-spacing: 0.12em; text-transform: uppercase; }
+    main { padding: 24px 32px; max-width: 860px; }
+    a, button { font: inherit; }
+    .danger { background: transparent; border: 1px solid rgba(240,178,71,0.4); color: #f0b247; padding: 8px 14px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.7rem; cursor: pointer; text-decoration:none; }
+    .panel { margin: 20px 0 28px; padding: 20px; border: 1px solid rgba(240,178,71,0.18); border-radius: 18px; background: rgba(255,255,255,0.02); }
+    .panel h2 { margin: 0 0 8px; font-size: 1rem; letter-spacing: 0.1em; text-transform: uppercase; color: #f0b247; }
+    .subtle { color: rgba(247,245,242,0.65); font-size: 0.9rem; line-height: 1.5; margin: 0 0 16px; }
+    textarea { width: 100%; box-sizing:border-box; min-height: 360px; padding: 14px; border-radius: 14px; border: 1px solid rgba(240,178,71,0.24); background: rgba(0,0,0,0.42); color: #f7f5f2; font-size: 1rem; line-height: 1.45; resize: vertical; }
+    .toggle-row { display:flex; justify-content:space-between; gap:18px; align-items:center; padding:14px; margin:0 0 16px; border:1px solid rgba(240,178,71,0.18); border-radius:14px; background:rgba(0,0,0,0.28); }
+    .toggle-row strong { display:block; color:#f7f5f2; margin-bottom:4px; }
+    .toggle-row span { color:rgba(247,245,242,0.62); font-size:0.82rem; line-height:1.4; }
+    .toggle-row input { width:24px; height:24px; accent-color:#f0b247; flex:0 0 auto; }
+    .actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+    .warning { color: rgba(240,178,71,0.8); font-size: 0.8rem; letter-spacing: 0.08em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Service Area</h1>
+    <a class="danger" href="/admin">Back to Admin</a>
+  </header>
+  <main>
+    <form class="panel" id="service-area-form">
+      <h2>SoCal Service Cities</h2>
+      <p class="subtle">One city per line. Pickup, drop off, and stop addresses must match these cities before a booking can be estimated or submitted.</p>
+      <label class="toggle-row">
+        <span>
+          <strong>Enable service-area limit</strong>
+          <span>Turn this off to allow estimates and bookings outside the configured SoCal city list.</span>
+        </span>
+        <input type="checkbox" name="socal_service_area_enabled" ${serviceAreaEnabled ? 'checked' : ''} />
+      </label>
+      <textarea name="socal_cities" rows="16">${escapeHtml(socalCitiesValue)}</textarea>
+      <div class="actions">
+        <button class="danger" type="submit">Save Service Area</button>
+        <span class="warning" id="service-area-status">Changes apply to the website and apps.</span>
+      </div>
+    </form>
+  </main>
+  <script>
+    const form = document.getElementById('service-area-form');
+    const status = document.getElementById('service-area-status');
+    form?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (status) status.textContent = 'Saving...';
+      try {
+        const response = await fetch('/admin/service-area', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            socal_cities: form.querySelector('textarea[name="socal_cities"]')?.value || '',
+            socal_service_area_enabled: Boolean(form.querySelector('input[name="socal_service_area_enabled"]')?.checked)
+          })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.ok === false) throw new Error(data.error || 'Unable to save service area.');
+        if (status) status.textContent = 'Service area saved.';
+      } catch (error) {
+        if (status) status.textContent = error.message || 'Unable to save service area.';
+      }
+    });
+  </script>
+</body>
+</html>`;
+};
+
 const renderAdminPage = (rows, pricing = {}) => {
   const adminEmailsValue = Array.isArray(pricing.adminEmails) ? pricing.adminEmails.join(', ') : DEFAULT_ADMIN_EMAILS;
   const driverEmailsValue = Array.isArray(pricing.driverEmails) ? pricing.driverEmails.join(', ') : '';
   const hourlyRate = Number.isFinite(Number(pricing.hourlyRate))
     ? Number(pricing.hourlyRate)
     : DEFAULT_HOURLY_RATE;
+  const mileageRateSuv = Number.isFinite(Number(pricing.mileageRateSuv))
+    ? Number(pricing.mileageRateSuv)
+    : DEFAULT_SUV_MILE_RATE;
+  const mileageRateSedan = Number.isFinite(Number(pricing.mileageRateSedan))
+    ? Number(pricing.mileageRateSedan)
+    : DEFAULT_SEDAN_MILE_RATE;
   const serviceTypes = normalizeServiceTypes(pricing.serviceTypes);
   const defaultServiceType = serviceTypes.includes(pricing.defaultServiceType)
     ? pricing.defaultServiceType
@@ -3636,6 +4358,7 @@ const renderAdminPage = (rows, pricing = {}) => {
     .pricing-card { border: 1px solid rgba(240,178,71,0.16); border-radius: 16px; padding: 14px; background: rgba(0,0,0,0.22); display: grid; gap: 10px; }
     .pricing-card strong { color: #f0b247; text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; }
     .pricing-card input { width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid rgba(240,178,71,0.24); background: rgba(0,0,0,0.42); color: #f7f5f2; font-size: 0.95rem; }
+    .pricing-card textarea, .pricing-card select { width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid rgba(240,178,71,0.24); background: rgba(0,0,0,0.42); color: #f7f5f2; font-size: 0.95rem; resize: vertical; }
     .pricing-card span { color: rgba(247,245,242,0.68); font-size: 0.82rem; line-height: 1.45; }
     .pricing-card-order { display: flex; gap: 8px; flex-wrap: wrap; }
     .route-image-preview { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 12px; border: 1px solid rgba(240,178,71,0.22); }
@@ -3668,8 +4391,10 @@ const renderAdminPage = (rows, pricing = {}) => {
       <a class="danger" href="/crm" style="text-decoration:none; display:inline-flex; align-items:center;">Open CRM</a>
       <a class="danger" href="/admin/support" style="text-decoration:none; display:inline-flex; align-items:center;">Support</a>
       <a class="danger" href="/admin/promos" style="text-decoration:none; display:inline-flex; align-items:center;">Promo Codes</a>
+      <a class="danger" href="/admin/service-area" style="text-decoration:none; display:inline-flex; align-items:center;">Service Area</a>
+      <button class="danger" id="notify-update" type="button">Notify App Update</button>
       <button class="danger" id="clear-bookings" type="button">Clear Bookings</button>
-      <span class="warning">Warning: this permanently deletes all bookings.</span>
+      <span class="warning" id="admin-action-status">Warning: clear permanently deletes all bookings.</span>
     </div>
     <form class="pricing-panel" id="pricing-form">
       <div class="pricing-header">
@@ -3686,12 +4411,22 @@ const renderAdminPage = (rows, pricing = {}) => {
         <div class="pricing-card">
           <strong>Default Vehicle</strong>
           <span>Used when a customer has not chosen a vehicle yet.</span>
-          <select name="default_service_type" style="width:100%; padding:11px 12px; border-radius:10px; border:1px solid rgba(240,178,71,0.24); background:rgba(0,0,0,0.42); color:#f7f5f2; font-size:0.95rem;">${serviceTypeOptions}</select>
+          <select name="default_service_type">${serviceTypeOptions}</select>
         </div>
         <div class="pricing-card">
           <strong>Hourly Rate</strong>
           <span>Used for all route estimates and hourly pricing.</span>
           <input type="number" min="1" step="0.01" name="hourly_rate" value="${escapeHtml(hourlyRate)}" />
+        </div>
+        <div class="pricing-card">
+          <strong>Black SUV Mileage</strong>
+          <span>Per-mile charge added to the hourly route estimate.</span>
+          <input type="number" min="0.01" step="0.01" name="mileage_rate_suv" value="${escapeHtml(mileageRateSuv)}" />
+        </div>
+        <div class="pricing-card">
+          <strong>Black Mileage</strong>
+          <span>Per-mile charge for sedan routes.</span>
+          <input type="number" min="0.01" step="0.01" name="mileage_rate_sedan" value="${escapeHtml(mileageRateSedan)}" />
         </div>
         ${pricingCards}
       </div>
@@ -3747,8 +4482,8 @@ const renderAdminPage = (rows, pricing = {}) => {
           <th>Total</th>
           <th>Status</th>
           <th>Travelers</th>
-          <th>Kids</th>
-          <th>Bags</th>
+          <th>Child seats</th>
+          <th>Luggage</th>
           <th>Contact</th>
           <th>Created</th>
           <th>Actions</th>
@@ -3768,6 +4503,28 @@ const renderAdminPage = (rows, pricing = {}) => {
     }
 
     const clearButton = document.getElementById('clear-bookings');
+    const notifyUpdateButton = document.getElementById('notify-update');
+    const adminActionStatus = document.getElementById('admin-action-status');
+    if (notifyUpdateButton) {
+      notifyUpdateButton.addEventListener('click', async () => {
+        const ok = confirm('Send an App Store update notification to all registered customer app devices?');
+        if (!ok) return;
+        notifyUpdateButton.disabled = true;
+        if (adminActionStatus) adminActionStatus.textContent = 'Sending update notification...';
+        try {
+          const response = await fetch('/admin/notify-update', { method: 'POST' });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || data.ok === false) {
+            throw new Error(data.error || 'Unable to send update notification.');
+          }
+          if (adminActionStatus) adminActionStatus.textContent = 'Update notification sent to ' + (data.delivered || 0) + ' devices.';
+        } catch (error) {
+          if (adminActionStatus) adminActionStatus.textContent = error.message || 'Unable to send update notification.';
+        } finally {
+          notifyUpdateButton.disabled = false;
+        }
+      });
+    }
     if (clearButton) {
       clearButton.addEventListener('click', () => {
         const ok = confirm('This will delete all bookings. Continue?');
@@ -3877,6 +4634,8 @@ const renderAdminPage = (rows, pricing = {}) => {
         const payload = {};
         const routeCountInput = pricingForm.querySelector('input[name="route_count"]');
         payload.hourly_rate = pricingForm.querySelector('input[name="hourly_rate"]')?.value || '';
+        payload.mileage_rate_suv = pricingForm.querySelector('input[name="mileage_rate_suv"]')?.value || '';
+        payload.mileage_rate_sedan = pricingForm.querySelector('input[name="mileage_rate_sedan"]')?.value || '';
         payload.service_types = pricingForm.querySelector('textarea[name="service_types"]')?.value || '';
         payload.default_service_type = pricingForm.querySelector('select[name="default_service_type"]')?.value || '';
         const routeCards = Array.from(pricingForm.querySelectorAll('[data-route-card]'));
@@ -3994,6 +4753,7 @@ const renderPromoAdminPage = (pricing = {}) => {
           <input type="text" data-promo-code value="${escapeHtml(promo.code)}" placeholder="CODE" />
           <select data-promo-type>${promoTypeOptions(promo.type || 'percent')}</select>
           <input type="number" min="0.01" step="0.01" data-promo-value value="${escapeHtml(value)}" placeholder="10" />
+          <label class="checkbox-row"><input type="checkbox" data-promo-automatic ${promo.automatic ? 'checked' : ''} /> Apply automatically</label>
           <input type="text" data-promo-cities value="${escapeHtml((promo.pickup_cities || []).join(', '))}" placeholder="Pickup cities, comma separated" />
           <input type="text" data-promo-pickup value="${escapeHtml(promo.pickup_match || '')}" placeholder="Pickup address match, optional" />
           <input type="text" data-promo-dropoff value="${escapeHtml(promo.dropoff_match || promo.route_match || '')}" placeholder="Dropoff address match, optional" />
@@ -4062,7 +4822,7 @@ const renderPromoAdminPage = (pricing = {}) => {
       const node = document.createElement('div');
       node.className = 'pricing-card';
       node.dataset.promoCard = '';
-      node.innerHTML = '<strong>Promo Code</strong><input type="text" data-promo-code placeholder="CODE" /><select data-promo-type>' + typeOptions + '</select><input type="number" min="0.01" step="0.01" data-promo-value placeholder="10" /><input type="text" data-promo-cities placeholder="Pickup cities, comma separated" /><input type="text" data-promo-pickup placeholder="Pickup address match, optional" /><input type="text" data-promo-dropoff placeholder="Dropoff address match, optional" /><label class="checkbox-row"><input type="checkbox" data-promo-round-only /> Round trip only</label><input type="text" data-promo-round-pickup placeholder="Round-trip pickup match, optional" /><input type="text" data-promo-round-dropoff placeholder="Round-trip dropoff match, optional" /><button class="mini-action" type="button" data-remove-promo>Remove</button>';
+      node.innerHTML = '<strong>Promo</strong><input type="text" data-promo-code placeholder="Internal name" /><select data-promo-type>' + typeOptions + '</select><input type="number" min="0.01" step="0.01" data-promo-value placeholder="10" /><label class="checkbox-row"><input type="checkbox" data-promo-automatic checked /> Apply automatically</label><input type="text" data-promo-cities placeholder="Pickup cities, comma separated" /><input type="text" data-promo-pickup placeholder="Pickup address match, optional" /><input type="text" data-promo-dropoff placeholder="Dropoff address match, optional" /><label class="checkbox-row"><input type="checkbox" data-promo-round-only /> Round trip only</label><input type="text" data-promo-round-pickup placeholder="Round-trip pickup match, optional" /><input type="text" data-promo-round-dropoff placeholder="Round-trip dropoff match, optional" /><button class="mini-action" type="button" data-remove-promo>Remove</button>';
       return node;
     };
     document.getElementById('add-promo')?.addEventListener('click', () => grid.appendChild(promoTemplate()));
@@ -4078,6 +4838,7 @@ const renderPromoAdminPage = (pricing = {}) => {
         const promo = {
           code: card.querySelector('[data-promo-code]')?.value || '',
           type,
+          automatic: Boolean(card.querySelector('[data-promo-automatic]')?.checked),
           pickup_cities: (card.querySelector('[data-promo-cities]')?.value || '').split(/[\\n,]/).map((city) => city.trim()).filter(Boolean),
           pickup_match: card.querySelector('[data-promo-pickup]')?.value || '',
           dropoff_match: card.querySelector('[data-promo-dropoff]')?.value || '',
@@ -4139,9 +4900,11 @@ export default {
       url.pathname === '/admin/clear' ||
       url.pathname === '/admin/export' ||
       url.pathname === '/admin/pricing' ||
+      url.pathname === '/admin/service-area' ||
       url.pathname === '/admin/promos' ||
       url.pathname === '/admin/admin-emails' ||
       url.pathname === '/admin/driver-accounts' ||
+      url.pathname === '/admin/notify-update' ||
       url.pathname === '/admin/booking-price' ||
       url.pathname === '/admin/approve' ||
       url.pathname === '/admin/reject' ||
@@ -4251,6 +5014,62 @@ export default {
       }
     }
 
+    if (url.pathname === '/api/customer/push/register') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+
+      const deviceToken = String(payload?.token || '').trim();
+      const platform = String(payload?.platform || 'ios').trim().toLowerCase();
+      const bundleId = String(payload?.bundle_id || env.APNS_TOPIC_CUSTOMER || 'com.luxtravco.app').trim();
+      if (platform === 'ios' && !/^[a-f0-9]{64,}$/i.test(deviceToken)) {
+        return jsonResponse({ ok: false, error: 'Invalid device token' }, 400, origin);
+      }
+      if (platform === 'android' && deviceToken.length < 20) {
+        return jsonResponse({ ok: false, error: 'Invalid FCM token' }, 400, origin);
+      }
+      if (platform !== 'ios' && platform !== 'android') {
+        return jsonResponse({ ok: false, error: 'Invalid platform' }, 400, origin);
+      }
+
+      const authHeader = request.headers.get('Authorization') || '';
+      const token = authHeader.startsWith('Bearer ')
+        ? authHeader.replace('Bearer ', '').trim()
+        : '';
+      if (!token && platform !== 'android') {
+        return jsonResponse({ ok: false, error: 'Missing access token' }, 401, origin);
+      }
+
+      let authPayload = null;
+      if (token) {
+        try {
+          authPayload = await verifySupabaseAccessToken(token);
+        } catch (error) {
+          return jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin);
+        }
+        if (!authPayload) {
+          return jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin);
+        }
+      }
+
+      await upsertCustomerPushToken(env, {
+        token: platform === 'ios' ? deviceToken.toLowerCase() : deviceToken,
+        userId: String(authPayload?.sub || authPayload?.user_id || '').trim(),
+        email: String(authPayload?.email || '').trim().toLowerCase(),
+        platform,
+        bundleId
+      });
+
+      return jsonResponse({ ok: true }, 200, origin);
+    }
+
     if (url.pathname === '/api/customer/delete-account') {
       if (request.method !== 'POST' && request.method !== 'DELETE') {
         return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
@@ -4308,6 +5127,13 @@ export default {
           .bind(email, userId)
           .run();
 
+        let notificationSent = false;
+        const deletionEmail = await sendAccountDeletedAdminEmail(env, { email, userId }).catch((error) => ({
+          ok: false,
+          error: error?.message || 'Account deletion notification failed'
+        }));
+        notificationSent = Boolean(deletionEmail?.ok);
+
         let authDeleted = false;
         const serviceRoleKey = String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
         if (serviceRoleKey && userId) {
@@ -4332,7 +5158,7 @@ export default {
           }
         }
 
-        return jsonResponse({ ok: true, deleted: true, auth_deleted: authDeleted }, 200, origin);
+        return jsonResponse({ ok: true, deleted: true, auth_deleted: authDeleted, notification_sent: notificationSent }, 200, origin);
       } catch (error) {
         return jsonResponse(
           {
@@ -5194,6 +6020,21 @@ export default {
       return jsonResponse({ ok: true }, 200, origin);
     }
 
+    if (url.pathname === '/api/admin/push/update-available') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      const auth = await requireAdminApiAuth(request, env, origin);
+      if (auth.response) return auth.response;
+
+      const sent = await sendCustomerUpdateNotification(env);
+      if (!sent.ok) {
+        return jsonResponse({ ok: false, error: sent.error || 'Unable to send update notification' }, 500, origin);
+      }
+      return jsonResponse({ ok: true, delivered: sent.delivered || 0 }, 200, origin);
+    }
+
     if (url.pathname === '/api/admin/inbox') {
       if (request.method !== 'GET') {
         return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
@@ -5441,6 +6282,8 @@ export default {
       }
 
       const hourlyRate = Number.parseFloat(payload?.hourly_rate);
+      const mileageRateSuv = Number.parseFloat(payload?.mileage_rate_suv);
+      const mileageRateSedan = Number.parseFloat(payload?.mileage_rate_sedan);
       const serviceTypes = normalizeServiceTypes(payload?.service_types || '');
       const defaultServiceType = String(payload?.default_service_type || serviceTypes[0] || DEFAULT_SERVICE_TYPE).trim();
       const requestedRouteCount = Number.parseInt(payload?.route_count || `${DEFAULT_FEATURED_ROUTES.length}`, 10);
@@ -5464,6 +6307,12 @@ export default {
       if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
         return jsonResponse({ ok: false, error: 'Invalid hourly rate' }, 400, origin);
       }
+      if (!Number.isFinite(mileageRateSuv) || mileageRateSuv <= 0) {
+        return jsonResponse({ ok: false, error: 'Invalid SUV mileage rate' }, 400, origin);
+      }
+      if (!Number.isFinite(mileageRateSedan) || mileageRateSedan <= 0) {
+        return jsonResponse({ ok: false, error: 'Invalid sedan mileage rate' }, 400, origin);
+      }
       if (!serviceTypes.length) {
         return jsonResponse({ ok: false, error: 'Add at least one vehicle option' }, 400, origin);
       }
@@ -5474,25 +6323,71 @@ export default {
         return jsonResponse({ ok: false, error: 'Every route needs a label and price' }, 400, origin);
       }
 
-      await setPricingSetting(env, 'hourly_rate', hourlyRate.toFixed(2));
-      await setPricingSetting(env, 'service_types', JSON.stringify(serviceTypes));
-      await setPricingSetting(env, 'default_service_type', defaultServiceType);
-      await setPricingSetting(env, 'route_count', String(featuredRoutes.length));
-      for (const route of featuredRoutes) {
-        await setPricingSetting(env, `${route.key}_label`, route.label);
-        await setPricingSetting(env, `${route.key}_price`, route.price.toFixed(2));
-        await setPricingSetting(env, `${route.key}_image_url`, route.image_url || '');
-      }
+      await setPricingSettings(env, [
+        ['hourly_rate', hourlyRate.toFixed(2)],
+        ['mileage_rate_suv', mileageRateSuv.toFixed(2)],
+        ['mileage_rate_sedan', mileageRateSedan.toFixed(2)],
+        ['service_types', JSON.stringify(serviceTypes)],
+        ['default_service_type', defaultServiceType],
+        ['route_count', String(featuredRoutes.length)],
+        ...featuredRoutes.flatMap((route) => [
+          [`${route.key}_label`, route.label],
+          [`${route.key}_price`, route.price.toFixed(2)],
+          [`${route.key}_image_url`, route.image_url || '']
+        ])
+      ]);
       const pricing = await getPricingSettings(env);
       return jsonResponse(
         {
           ok: true,
           pricing: {
             hourly_rate: hourlyRate,
+            mileage_rate_suv: mileageRateSuv,
+            mileage_rate_sedan: mileageRateSedan,
+            service_mile_rates: pricing.serviceMileRates,
             service_types: serviceTypes,
             default_service_type: defaultServiceType,
             featured_routes: featuredRoutes,
             promo_codes: pricing.promoCodes,
+            socal_service_area_enabled: pricing.socalServiceAreaEnabled,
+            socal_cities: pricing.socalCities,
+            admin_emails: pricing.adminEmails
+          }
+        },
+        200,
+        origin
+      );
+    }
+
+    if (url.pathname === '/api/admin/service-area') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+      const socalCities = normalizeSoCalCities(payload?.socal_cities || '');
+      const socalServiceAreaEnabled = normalizeSettingBoolean(payload?.socal_service_area_enabled, true);
+      await setPricingSetting(env, 'socal_service_area_enabled', String(socalServiceAreaEnabled));
+      await setPricingSetting(env, 'socal_cities', socalCities.join('\n'));
+      const pricing = await getPricingSettings(env);
+      return jsonResponse(
+        {
+          ok: true,
+          pricing: {
+            hourly_rate: pricing.hourlyRate,
+            mileage_rate_suv: pricing.mileageRateSuv,
+            mileage_rate_sedan: pricing.mileageRateSedan,
+            service_mile_rates: pricing.serviceMileRates,
+            service_types: pricing.serviceTypes,
+            default_service_type: pricing.defaultServiceType,
+            featured_routes: pricing.featuredRoutes,
+            promo_codes: pricing.promoCodes,
+            socal_service_area_enabled: pricing.socalServiceAreaEnabled,
+            socal_cities: pricing.socalCities,
             admin_emails: pricing.adminEmails
           }
         },
@@ -5619,16 +6514,22 @@ export default {
         'customer_email',
         'customer_user_id',
         'travelers',
-        'kids',
-        'bags',
+        'child_seats',
+        'luggage',
         'contact_number',
         'created_at'
       ];
 
+      const csvValueForKey = (row, key) => {
+        if (key === 'child_seats') return row.kids;
+        if (key === 'luggage') return row.bags;
+        return row[key];
+      };
+
       const rows = (results || []).map((row) =>
         header
           .map((key) => {
-            const value = row[key] ?? '';
+            const value = csvValueForKey(row, key) ?? '';
             const safe = String(value).replace(/"/g, '""');
             return `"${safe}"`;
           })
@@ -5706,6 +6607,17 @@ export default {
       return jsonResponse({ ok: true }, 200, origin);
     }
 
+    if (url.pathname === '/admin/notify-update') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      const sent = await sendCustomerUpdateNotification(env);
+      if (!sent.ok) {
+        return jsonResponse({ ok: false, error: sent.error || 'Unable to send update notification' }, 500, origin);
+      }
+      return jsonResponse({ ok: true, delivered: sent.delivered || 0 }, 200, origin);
+    }
+
     if (url.pathname === '/admin') {
       await ensureBookingColumns(env);
       const { results } = await env.DB.prepare(
@@ -5751,10 +6663,15 @@ export default {
           ok: true,
           pricing: {
             hourly_rate: pricing.hourlyRate,
+            mileage_rate_suv: pricing.mileageRateSuv,
+            mileage_rate_sedan: pricing.mileageRateSedan,
+            service_mile_rates: pricing.serviceMileRates,
             service_types: pricing.serviceTypes,
             default_service_type: pricing.defaultServiceType,
             featured_routes: pricing.featuredRoutes,
             promo_codes: pricing.promoCodes,
+            socal_service_area_enabled: pricing.socalServiceAreaEnabled,
+            socal_cities: pricing.socalCities,
             admin_emails: pricing.adminEmails
           }
         },
@@ -5779,17 +6696,26 @@ export default {
       const normalizedServiceType = pricing.serviceTypes.includes(String(payload?.service_type || '').trim())
         ? String(payload?.service_type || '').trim()
         : pricing.defaultServiceType;
+      const socalRoute = validateSouthernCaliforniaRoute(
+        payload?.route_points,
+        pricing.socalCities,
+        pricing.socalServiceAreaEnabled
+      );
+      if (!socalRoute.ok) {
+        return jsonResponse({ ok: false, error: socalRoute.error }, 400, origin);
+      }
       const routeEstimate = calculateRouteEstimate(payload?.route_points, payload);
       if (!routeEstimate) {
         return jsonResponse({ ok: false, error: 'Select valid pickup and drop off locations' }, 400, origin);
       }
 
-      const mileRate = serviceMileRate(normalizedServiceType);
+      const mileRate = serviceMileRate(normalizedServiceType, pricing.serviceMileRates);
       const totalCents = calcTimeAndMileageTotalCents(
         routeEstimate.hours,
         routeEstimate.miles,
         pricing.hourlyRate,
-        normalizedServiceType
+        normalizedServiceType,
+        pricing.serviceMileRates
       );
       return jsonResponse(
         {
@@ -5802,10 +6728,45 @@ export default {
             total: totalCents / 100,
             hourly_rate: pricing.hourlyRate,
             mile_rate: mileRate,
+            service_mile_rates: pricing.serviceMileRates,
             service_type: normalizedServiceType,
             source: 'route_mileage'
           }
         },
+        200,
+        origin
+      );
+    }
+
+    if (url.pathname === '/admin/service-area') {
+      if (request.method !== 'POST' && request.method !== 'GET') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      if (request.method === 'GET') {
+        const pricing = await getPricingSettings(env);
+        return htmlResponse(renderServiceAreaPage(pricing));
+      }
+
+      let payload = {};
+      try {
+        const contentType = request.headers.get('Content-Type') || '';
+        if (contentType.includes('application/json')) {
+          payload = await request.json();
+        } else {
+          const form = await request.formData();
+          payload = Object.fromEntries(form.entries());
+        }
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+
+      const socalCities = normalizeSoCalCities(payload?.socal_cities || '');
+      const socalServiceAreaEnabled = normalizeSettingBoolean(payload?.socal_service_area_enabled, true);
+      await setPricingSetting(env, 'socal_service_area_enabled', String(socalServiceAreaEnabled));
+      await setPricingSetting(env, 'socal_cities', socalCities.join('\n'));
+      return jsonResponse(
+        { ok: true, socal_service_area_enabled: socalServiceAreaEnabled, socal_cities: socalCities },
         200,
         origin
       );
@@ -5827,6 +6788,8 @@ export default {
       }
 
       const hourlyRate = Number.parseFloat(payload?.hourly_rate);
+      const mileageRateSuv = Number.parseFloat(payload?.mileage_rate_suv);
+      const mileageRateSedan = Number.parseFloat(payload?.mileage_rate_sedan);
       const serviceTypes = normalizeServiceTypes(payload?.service_types || '');
       const defaultServiceType = String(payload?.default_service_type || serviceTypes[0] || DEFAULT_SERVICE_TYPE).trim();
       const requestedRouteCount = Number.parseInt(payload?.route_count || `${DEFAULT_FEATURED_ROUTES.length}`, 10);
@@ -5851,6 +6814,12 @@ export default {
       if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
         return jsonResponse({ ok: false, error: 'Invalid hourly rate' }, 400, origin);
       }
+      if (!Number.isFinite(mileageRateSuv) || mileageRateSuv <= 0) {
+        return jsonResponse({ ok: false, error: 'Invalid SUV mileage rate' }, 400, origin);
+      }
+      if (!Number.isFinite(mileageRateSedan) || mileageRateSedan <= 0) {
+        return jsonResponse({ ok: false, error: 'Invalid sedan mileage rate' }, 400, origin);
+      }
       if (!serviceTypes.length) {
         return jsonResponse({ ok: false, error: 'Add at least one vehicle option' }, 400, origin);
       }
@@ -5865,29 +6834,39 @@ export default {
         return jsonResponse({ ok: false, error: 'Every route needs a label and price' }, 400, origin);
       }
 
-      await setPricingSetting(env, 'hourly_rate', hourlyRate.toFixed(2));
-      await setPricingSetting(env, 'service_types', JSON.stringify(serviceTypes));
-      await setPricingSetting(env, 'default_service_type', defaultServiceType);
-      await setPricingSetting(env, 'route_count', String(featuredRoutes.length));
-      for (const route of featuredRoutes) {
-        await setPricingSetting(env, `${route.key}_label`, route.label);
-        await setPricingSetting(env, `${route.key}_price`, route.price.toFixed(2));
-        await setPricingSetting(env, `${route.key}_image_url`, route.image_url || '');
-      }
+      await setPricingSettings(env, [
+        ['hourly_rate', hourlyRate.toFixed(2)],
+        ['mileage_rate_suv', mileageRateSuv.toFixed(2)],
+        ['mileage_rate_sedan', mileageRateSedan.toFixed(2)],
+        ['service_types', JSON.stringify(serviceTypes)],
+        ['default_service_type', defaultServiceType],
+        ['route_count', String(featuredRoutes.length)],
+        ...featuredRoutes.flatMap((route) => [
+          [`${route.key}_label`, route.label],
+          [`${route.key}_price`, route.price.toFixed(2)],
+          [`${route.key}_image_url`, route.image_url || '']
+        ])
+      ]);
 
       if (request.method === 'GET') {
         return Response.redirect(new URL('/admin', request.url).toString(), 302);
       }
 
+      const pricing = await getPricingSettings(env);
       return jsonResponse(
         {
           ok: true,
           pricing: {
             hourly_rate: hourlyRate,
+            mileage_rate_suv: mileageRateSuv,
+            mileage_rate_sedan: mileageRateSedan,
+            service_mile_rates: pricing.serviceMileRates,
             service_types: serviceTypes,
             default_service_type: defaultServiceType,
             featured_routes: featuredRoutes,
-            promo_codes: (await getPricingSettings(env)).promoCodes
+            promo_codes: pricing.promoCodes,
+            socal_service_area_enabled: pricing.socalServiceAreaEnabled,
+            socal_cities: pricing.socalCities
           }
         },
         200,
@@ -6204,6 +7183,7 @@ export default {
       route_points,
       route_miles,
       route_seconds,
+      route_pricing_mode,
       stops,
       customer_email,
       customer_user_id,
@@ -6263,14 +7243,23 @@ export default {
     const normalizedServiceType = pricing.serviceTypes.includes(String(service_type || '').trim())
       ? String(service_type || '').trim()
       : pricing.defaultServiceType;
-    const routeEstimate = calculateRouteEstimate(route_points, { route_miles, route_seconds });
+    const socalRoute = validateSouthernCaliforniaRoute(
+      route_points,
+      pricing.socalCities,
+      pricing.socalServiceAreaEnabled
+    );
+    if (!socalRoute.ok) {
+      return jsonResponse({ ok: false, error: socalRoute.error }, 400, origin);
+    }
+    const routeEstimate = calculateRouteEstimate(route_points, { route_miles, route_seconds, booking_mode: mode, route_pricing_mode });
     const estimatedHours = routeEstimate?.hours ?? null;
     const totalCents = routeEstimate
       ? calcTimeAndMileageTotalCents(
           routeEstimate.hours,
           routeEstimate.miles,
           pricing.hourlyRate,
-          normalizedServiceType
+          normalizedServiceType,
+          pricing.serviceMileRates
         )
       : null;
 
@@ -6278,22 +7267,29 @@ export default {
       return jsonResponse({ ok: false, error: 'Invalid route estimate' }, 400, origin);
     }
 
+    const bookingAddOns = calculateBookingAddOns({ kids, bags });
+    const originalTotalCents = totalCents + bookingAddOns.totalCents;
+    const destinationPromoText = [dropoff_location, parseStopsText(stops)].filter(Boolean).join(' ');
     const promo = calculatePromoDiscountCents({
       promoCode: promo_code,
       subtotalCents: totalCents,
       promoCodes: pricing.promoCodes,
       pickupText: pickup_location,
-      destinationText: [dropoff_location, parseStopsText(stops)].filter(Boolean).join(' '),
+      destinationText: destinationPromoText,
       bookingMode: mode,
       roundTripText: parseStopsText(stops)
     });
-    const automaticRouteDiscountCents = calculateAutomaticRouteDiscountCents({
+    const automaticPromo = calculateAutomaticPromoDiscountCents({
       subtotalCents: totalCents,
+      promoCodes: pricing.promoCodes,
       pickupText: pickup_location,
-      destinationText: dropoff_location
+      destinationText: destinationPromoText,
+      bookingMode: mode,
+      roundTripText: parseStopsText(stops)
     });
-    const discountCents = Math.max(automaticRouteDiscountCents, promo.discountCents);
-    const discountedTotalCents = Math.max(0, totalCents - discountCents);
+    const appliedDiscount = automaticPromo.discountCents >= promo.discountCents ? automaticPromo : promo;
+    const discountCents = appliedDiscount.discountCents;
+    const discountedTotalCents = Math.max(0, totalCents - discountCents) + bookingAddOns.totalCents;
     const gratuity = calculateGratuityCents({
       subtotalCents: totalCents,
       gratuityPercent: gratuity_percent
@@ -6347,9 +7343,9 @@ export default {
           normalizedServiceType,
           String(estimatedHours?.toFixed(2) || ''),
           String(finalTotalCents),
-          automaticRouteDiscountCents > 0 && automaticRouteDiscountCents >= promo.discountCents ? 'SNA_DISNEYLAND_AUTO' : promo.promoCode,
+          appliedDiscount.discountCents > 0 ? appliedDiscount.promoCode : '',
           discountCents,
-          totalCents,
+          originalTotalCents,
           gratuity.gratuityPercent,
           gratuity.gratuityCents,
           'pending_review',
@@ -6390,14 +7386,15 @@ export default {
         stopsText ? `Stops: ${stopsText}` : null,
         routeEstimate?.miles ? `Mileage: ${routeEstimate.miles.toFixed(1)} mi` : null,
         `Estimated time: ${estimatedHours?.toFixed(2)} hours`,
-        automaticRouteDiscountCents > 0 && automaticRouteDiscountCents >= promo.discountCents
-          ? `Automatic route price: SNA to Disneyland (-$${(automaticRouteDiscountCents / 100).toFixed(2)})`
-          : promo.promoCode ? `Promo: ${promo.promoCode}${promo.discountCents ? ` (-$${(promo.discountCents / 100).toFixed(2)})` : ' (not applied)'}` : null,
+        appliedDiscount.discountCents > 0
+          ? `Promo: ${appliedDiscount.promoCode} (-$${(appliedDiscount.discountCents / 100).toFixed(2)})`
+          : promo.promoCode ? `Promo: ${promo.promoCode} (not applied)` : null,
+        `Add-ons: $${(bookingAddOns.totalCents / 100).toFixed(2)}`,
         `Driver gratuity: ${gratuity.gratuityPercent}% ($${(gratuity.gratuityCents / 100).toFixed(2)})`,
         `Total: $${(finalTotalCents / 100).toFixed(2)}`,
         `Travelers: ${travelers || '—'}`,
-        `Kids: ${kids || '—'}`,
-        `Bags: ${bags || '—'}`,
+        `Child seats: ${kids || '—'} (${formatCurrency(bookingAddOns.childSeatPriceCents)})`,
+        `Luggage: ${bags || '—'} (${formatCurrency(bookingAddOns.luggagePriceCents)})`,
         `Contact: ${contact_number || '—'}`
       ]
         .filter(Boolean)
@@ -6421,14 +7418,16 @@ export default {
             service_type: normalizedServiceType,
             estimated_hours: String(estimatedHours?.toFixed(2) || ''),
             estimated_total_cents: finalTotalCents,
-            promo_code: automaticRouteDiscountCents > 0 && automaticRouteDiscountCents >= promo.discountCents ? 'SNA_DISNEYLAND_AUTO' : promo.promoCode,
+            promo_code: appliedDiscount.discountCents > 0 ? appliedDiscount.promoCode : '',
             promo_discount_cents: discountCents,
-            original_total_cents: totalCents,
+            original_total_cents: originalTotalCents,
             gratuity_percent: gratuity.gratuityPercent,
             gratuity_cents: gratuity.gratuityCents,
             travelers: travelers || '',
             kids: kids || '',
             bags: bags || '',
+            child_seat_price_cents: bookingAddOns.childSeatPriceCents,
+            luggage_price_cents: bookingAddOns.luggagePriceCents,
             payment_status: paymentStatus,
             created_at: createdAt
           })

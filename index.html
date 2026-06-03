@@ -31,7 +31,6 @@
       }
     })();
   </script>
-  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" defer></script>
 </head>
 <body>
   <div class="noise"></div>
@@ -108,13 +107,23 @@
       <div class="service-grid">
         <article class="service-tile">
           <h3>One Way</h3>
-          <p>Direct chauffeured service for a single route with polished pickup and dropoff coordination.</p>
+          <p>Direct chauffeured service for a single route.</p>
           <span class="service-tag">Single direct route</span>
         </article>
         <article class="service-tile">
           <h3>Round Trip</h3>
-          <p>Build a full return journey with paired pickups and dropoffs for each stop.</p>
+          <p>Build a full return journey with paired pickup and dropoff legs.</p>
           <span class="service-tag">Pickup + dropoff legs</span>
+        </article>
+        <article class="service-tile">
+          <h3>City to City</h3>
+          <p>Private travel between cities with luxury door-to-door service.</p>
+          <span class="service-tag">City transfer</span>
+        </article>
+        <article class="service-tile">
+          <h3>Airport Transfer</h3>
+          <p>Airport pickup or dropoff with polished timing and luggage support.</p>
+          <span class="service-tag">Airport service</span>
         </article>
       </div>
     </section>
@@ -313,20 +322,74 @@
               </div>
               <div class="roundtrip-stops hourly-only" id="roundtrip-stops"></div>
               <button class="add-stop hourly-only" type="button" data-action="add-stop">+ Add Stop</button>
-              <div class="count-row">
-                <label>
-                  Travelers
-                  <input type="number" min="1" max="6" value="1" name="travelers" />
-                </label>
-                <label>
-                  Kids
-                  <input type="number" min="0" max="6" value="0" name="kids" />
-                </label>
-                <label>
-                  Bags
-                  <input type="number" min="0" max="6" value="0" name="bags" />
-                </label>
-              </div>
+              <fieldset class="addon-field">
+                <legend>Luggage</legend>
+                <div class="child-seat-toggle">
+                  <label>
+                    <input type="radio" name="hasPassengerLuggage" value="no" checked />
+                    <span>No</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="hasPassengerLuggage" value="yes" />
+                    <span>Yes</span>
+                  </label>
+                </div>
+                <div data-passenger-luggage-counters hidden>
+                  <div class="count-row">
+                    <label>
+                      Travelers
+                      <input type="number" min="1" max="6" value="1" name="travelers" />
+                    </label>
+                    <label>
+                      Carry-On
+                      <input type="number" min="0" max="6" value="0" name="carryOnBags" />
+                    </label>
+                    <label>
+                      Checked Bags
+                      <input type="number" min="0" max="4" value="0" name="checkedBags" />
+                    </label>
+                    <label>
+                      Oversize
+                      <input type="number" min="0" max="4" value="0" name="oversizedBags" />
+                    </label>
+                  </div>
+                  <p class="luggage-note" data-luggage-note>SUV luggage max: 6 carry-on, or 4 checked + 2 carry-on.</p>
+                </div>
+              </fieldset>
+              <fieldset class="addon-field">
+                <legend>
+                  Child Seat
+                  <strong data-addons-total>$0</strong>
+                </legend>
+                <input type="hidden" value="0" name="forwardFacingSeats" />
+                <input type="hidden" value="0" name="boosterSeats" />
+                <div class="child-seat-toggle">
+                  <label>
+                    <input type="radio" name="hasChildSeats" value="no" checked />
+                    <span>No</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="hasChildSeats" value="yes" />
+                    <span>Yes</span>
+                  </label>
+                </div>
+                <div class="child-seat-counters" data-child-seat-counters hidden>
+                  <div class="addon-row">
+                    <div>
+                      <strong>Forward-Facing Seat</strong>
+                      <span>$10 each</span>
+                    </div>
+                    <input type="number" min="0" max="2" value="0" data-seat-counter="forward" />
+                  </div>
+                  <div class="addon-row">
+                    <div>
+                      <strong>Booster Seat</strong>
+                      <span>$10 each</span>
+                    </div>
+                    <input type="number" min="0" max="2" value="0" data-seat-counter="booster" />
+                  </div>
+                </div>
+              </fieldset>
               <label>
                 Contact Number
                 <input type="text" placeholder="+1 (312) 555-0198" name="contactNumber" />
@@ -365,8 +428,6 @@
                 </div>
                 <input class="custom-gratuity-input" type="number" min="15" max="100" step="1" name="customGratuityPercent" placeholder="Custom tip % (min 15)" />
               </fieldset>
-              <input type="hidden" name="turnstile_token" value="" />
-              <div class="turnstile-wrap"><div id="booking-turnstile"></div></div>
               <div class="action-row">
                 <button class="secondary-btn" type="reset">Cancel</button>
                 <button class="primary-btn" type="button" data-action="email-form">

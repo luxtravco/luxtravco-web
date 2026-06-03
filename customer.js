@@ -226,10 +226,14 @@ const renderDashboard = (bookings) => {
             </div>
             <div class="receipt-cell">
               <span>Travelers</span>
-              <strong>${booking.travelers || '—'}${booking.kids ? ` + ${booking.kids} kids` : ''}</strong>
+              <strong>${booking.travelers || '—'}</strong>
             </div>
             <div class="receipt-cell">
-              <span>Bags</span>
+              <span>Child seats</span>
+              <strong>${booking.kids || '—'}</strong>
+            </div>
+            <div class="receipt-cell">
+              <span>Luggage</span>
               <strong>${booking.bags || '—'}</strong>
             </div>
           </div>

@@ -5,15 +5,15 @@ const revealItems = document.querySelectorAll('.reveal');
 const CONTACT_EMAIL = 'info@luxtravco.com';
 const MAPTILER_KEY = 'P5BwAZLxLbVaNx8lbi2W';
 const BOOKING_API_URL = 'https://luxtravco-booking.luxtravco1.workers.dev';
-const TURNSTILE_SITE_KEY = '0x4AAAAAADKgEnWwAtX5Nmju';
 const HOURLY_RATE = 79;
 const ESTIMATE_SPEED_MPH = 28;
 const ESTIMATE_MINUTES_BUFFER = 18;
 const ESTIMATE_MINUTES_PER_STOP = 8;
 const PROMO_CODES = {
   '10OFF': { type: 'percent', amount: 10, label: '10% off' },
-  '149LAX': { type: 'fixed_route_total', amountCents: 14900, routeMatch: 'LAX', label: '$149 LAX' },
-  '99SNA': { type: 'fixed_route_total', amountCents: 9900, routeMatch: 'SNA', label: '$99 SNA' }
+  '149LAX': { type: 'fixed_route_total', amountCents: 14900, routeMatch: 'LAX', pickupCities: ['Corona', 'Riverside'], automatic: true, label: '$149 LAX' },
+  '99SNA': { type: 'fixed_route_total', amountCents: 9900, routeMatch: 'SNA', pickupCities: ['Corona', 'Riverside'], automatic: true, label: '$99 SNA' },
+  'SNA_DISNEYLAND_AUTO': { type: 'fixed_route_total', amountCents: 7500, pickupMatch: 'SNA', dropoffMatch: 'Disneyland', automatic: true, label: '$75 SNA to Disneyland' }
 };
 
 const observer = new IntersectionObserver(
@@ -42,63 +42,17 @@ let estimateTimer = null;
 let currentEstimateMiles = null;
 let bookingButton = null;
 let bookingForm = null;
-let bookingTurnstile = null;
 let appliedPromoCode = '';
-
-const waitForTurnstile = () =>
-  new Promise((resolve) => {
-    if (window.turnstile) {
-      resolve(window.turnstile);
-      return;
-    }
-    const startedAt = Date.now();
-    const timer = window.setInterval(() => {
-      if (window.turnstile || Date.now() - startedAt > 10000) {
-        window.clearInterval(timer);
-        resolve(window.turnstile || null);
-      }
-    }, 100);
-  });
-
-const initBookingTurnstile = async () => {
-  const container = document.getElementById('booking-turnstile');
-  if (!container || bookingTurnstile?.widgetId) return bookingTurnstile;
-  const input = bookingForm?.querySelector('input[name="turnstile_token"]') || null;
-  const api = await waitForTurnstile();
-  if (!api) return null;
-
-  const widgetId = api.render(container, {
-    sitekey: TURNSTILE_SITE_KEY,
-    theme: 'dark',
-    appearance: 'always',
-    callback: (token) => {
-      if (input) input.value = token || '';
-    },
-    'expired-callback': () => {
-      if (input) input.value = '';
-    },
-    'error-callback': () => {
-      if (input) input.value = '';
-    }
-  });
-
-  bookingTurnstile = { widgetId, input };
-  return bookingTurnstile;
-};
-
-const getBookingTurnstileToken = async () => {
-  const widget = await initBookingTurnstile();
-  return String(widget?.input?.value || '').trim();
-};
-
-const resetBookingTurnstile = () => {
-  if (bookingTurnstile?.input) bookingTurnstile.input.value = '';
-  if (bookingTurnstile?.widgetId != null && window.turnstile) {
-    window.turnstile.reset(bookingTurnstile.widgetId);
-  }
-};
 let pricingState = {
   hourlyRate: HOURLY_RATE,
+  mileageRateSuv: 4,
+  mileageRateSedan: 3,
+  serviceMileRates: {
+    'Executive Black SUV': 4,
+    'Black SUV': 4,
+    'Black Luxury Sedan': 3,
+    'Black Sedan': 3
+  },
   serviceTypes: ['Executive Black SUV', 'Black Luxury Sedan'],
   defaultServiceType: 'Executive Black SUV',
   featuredRoutes: [
@@ -118,9 +72,12 @@ const getSelectedServiceType = () =>
   preferredServiceTypes[0];
 
 const serviceMileRate = (serviceType) => {
-  const normalized = String(serviceType || '').toLowerCase();
-  if (normalized.includes('sedan')) return 3;
-  return 4;
+  const service = String(serviceType || '').trim();
+  const configured = Number(pricingState.serviceMileRates?.[service]);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  const normalized = service.toLowerCase();
+  if (normalized.includes('sedan')) return Number(pricingState.mileageRateSedan) || 3;
+  return Number(pricingState.mileageRateSuv) || 4;
 };
 
 const calculateTripBaseTotal = ({ hours, miles, serviceType }) => {
@@ -381,6 +338,15 @@ const loadPricingSettings = async () => {
     const data = await response.json();
     if (!response.ok || !data?.ok) return;
     const hourlyRate = Number.parseFloat(data?.pricing?.hourly_rate);
+    const mileageRateSuv = Number.parseFloat(data?.pricing?.mileage_rate_suv);
+    const mileageRateSedan = Number.parseFloat(data?.pricing?.mileage_rate_sedan);
+    const serviceMileRates = data?.pricing?.service_mile_rates && typeof data.pricing.service_mile_rates === 'object'
+      ? Object.fromEntries(
+          Object.entries(data.pricing.service_mile_rates)
+            .map(([key, value]) => [String(key || '').trim(), Number.parseFloat(value)])
+            .filter(([key, value]) => key && Number.isFinite(value) && value > 0)
+        )
+      : {};
     const serviceTypes = Array.isArray(data?.pricing?.service_types)
       ? data.pricing.service_types.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
@@ -409,18 +375,28 @@ const loadPricingSettings = async () => {
           const roundTripOnly = promo?.round_trip_only === true;
           const roundTripPickupMatch = String(promo?.round_trip_pickup_match || '').trim();
           const roundTripDropoffMatch = String(promo?.round_trip_dropoff_match || '').trim();
+          const automatic = promo?.automatic === true;
           if (code && type === 'fixed_route_total' && Number.isFinite(amountCents) && amountCents > 0 && (routeMatch || dropoffMatch || roundTripPickupMatch || roundTripDropoffMatch)) {
-            map[code] = { type, amountCents, routeMatch, pickupMatch, dropoffMatch, pickupCities, roundTripOnly, roundTripPickupMatch, roundTripDropoffMatch, label: `$${(amountCents / 100).toFixed(0)} ${routeMatch || 'route'}` };
+            map[code] = { type, amountCents, routeMatch, pickupMatch, dropoffMatch, pickupCities, automatic, roundTripOnly, roundTripPickupMatch, roundTripDropoffMatch, label: `$${(amountCents / 100).toFixed(0)} ${routeMatch || 'route'}` };
           } else if (code && type === 'fixed_discount' && Number.isFinite(amountCents) && amountCents > 0) {
-            map[code] = { type, amountCents, pickupMatch, dropoffMatch, pickupCities, roundTripOnly, roundTripPickupMatch, roundTripDropoffMatch, label: `$${(amountCents / 100).toFixed(0)} off` };
+            map[code] = { type, amountCents, pickupMatch, dropoffMatch, pickupCities, automatic, roundTripOnly, roundTripPickupMatch, roundTripDropoffMatch, label: `$${(amountCents / 100).toFixed(0)} off` };
           } else if (code && Number.isFinite(percent) && percent > 0 && percent <= 100) {
-            map[code] = { type: 'percent', amount: percent, pickupMatch, dropoffMatch, pickupCities, roundTripOnly, roundTripPickupMatch, roundTripDropoffMatch, label: `${percent}% off` };
+            map[code] = { type: 'percent', amount: percent, pickupMatch, dropoffMatch, pickupCities, automatic, roundTripOnly, roundTripPickupMatch, roundTripDropoffMatch, label: `${percent}% off` };
           }
           return map;
         }, {})
       : {};
     if (Number.isFinite(hourlyRate) && hourlyRate > 0) {
       pricingState.hourlyRate = hourlyRate;
+    }
+    if (Number.isFinite(mileageRateSuv) && mileageRateSuv > 0) {
+      pricingState.mileageRateSuv = mileageRateSuv;
+    }
+    if (Number.isFinite(mileageRateSedan) && mileageRateSedan > 0) {
+      pricingState.mileageRateSedan = mileageRateSedan;
+    }
+    if (Object.keys(serviceMileRates).length) {
+      pricingState.serviceMileRates = serviceMileRates;
     }
     if (serviceTypes.length) {
       pricingState.serviceTypes = serviceTypes;
@@ -737,6 +713,12 @@ const setupBookingTabs = () => {
         toggle.textContent.trim().toLowerCase() === 'round trip'
           ? 'hourly'
           : 'transfer';
+      if (bookingMode === 'hourly') {
+        appliedPromoCode = '';
+        const promoInput = bookingForm?.querySelector('[name="promoCode"]');
+        if (promoInput) promoInput.value = '';
+        syncPromoStatus('Round trip selected. Promo code cleared.');
+      }
       const header = document.querySelector('.map-header');
       if (header) {
         header.textContent =
@@ -793,36 +775,49 @@ const normalizePromoCode = (value) =>
     .toUpperCase()
     .replace(/\s+/g, '');
 
+const normalizeLocationText = (value) =>
+  String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 const routeMatchAliases = (match) => {
-  const normalized = String(match || '').trim().toUpperCase();
+  const normalized = normalizeLocationText(match);
   if (!normalized) return [];
-  if (normalized === 'LAX') {
-    return ['LAX', 'LOS ANGELES INTERNATIONAL AIRPORT', '90045'];
+  if (normalized === 'LAX' || normalized.includes('LOS ANGELES INTERNATIONAL AIRPORT') || normalized.includes('1 WORLD WAY') || normalized.includes('90045')) {
+    return ['LAX', 'LOS ANGELES INTERNATIONAL AIRPORT', '1 WORLD WAY', '90045'];
   }
-  if (normalized === 'SNA') {
-    return ['18601 AIRPORT WAY, SANTA ANA, CA 92707'];
+  if (normalized === 'SNA' || normalized.includes('JOHN WAYNE AIRPORT') || normalized.includes('SANTA ANA AIRPORT') || normalized.includes('ORANGE COUNTY AIRPORT') || normalized.includes('18601 AIRPORT WAY') || normalized.includes('92707')) {
+    return ['SNA', 'JOHN WAYNE AIRPORT', 'SANTA ANA AIRPORT', 'ORANGE COUNTY AIRPORT', '18601 AIRPORT WAY', '92707'];
+  }
+  if (normalized === 'DISNEYLAND' || normalized.includes('DISNEYLAND PARK') || normalized.includes('1313 DISNEYLAND') || normalized.includes('92802')) {
+    return ['DISNEYLAND', 'DISNEYLAND PARK', '1313 DISNEYLAND DR', '92802'];
   }
   return [normalized];
 };
 
 const destinationMatchesPromo = (promo, destinationText) => {
-  const text = String(destinationText || '').toUpperCase();
-  const aliases = routeMatchAliases(promo?.routeMatch);
+  const text = normalizeLocationText(destinationText);
+  const aliases = routeMatchAliases(promo?.routeMatch).map(normalizeLocationText);
   return !aliases.length || aliases.some((alias) => text.includes(alias));
 };
 
 const addressMatchesPromoValue = (actualText, expectedText) => {
-  const expected = String(expectedText || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  const expected = normalizeLocationText(expectedText);
   if (!expected) return true;
-  const actual = String(actualText || '').trim().toUpperCase().replace(/\s+/g, ' ');
-  return actual.includes(expected);
+  const actual = normalizeLocationText(actualText);
+  const aliases = [expected, ...routeMatchAliases(expectedText).map(normalizeLocationText)];
+  if (aliases.some((alias) => alias && actual.includes(alias))) return true;
+  const expectedTokens = expected.split(' ').filter((token) => token.length > 2 && !['THE', 'AND', 'WAY', 'DR', 'AVE', 'ST', 'CA', 'USA'].includes(token));
+  return expectedTokens.length > 0 && expectedTokens.every((token) => actual.includes(token));
 };
 
 const pickupCityMatchesPromo = (promo, pickupText) => {
   const cities = Array.isArray(promo?.pickupCities) ? promo.pickupCities : [];
   if (!cities.length) return true;
-  const actual = String(pickupText || '').trim().toUpperCase().replace(/\s+/g, ' ');
-  return cities.some((city) => actual.includes(String(city || '').trim().toUpperCase().replace(/\s+/g, ' ')));
+  const actual = normalizeLocationText(pickupText);
+  return cities.some((city) => actual.includes(normalizeLocationText(city)));
 };
 
 const currentRoundTripText = () =>
@@ -832,43 +827,54 @@ const currentRoundTripText = () =>
 
 const roundTripMatchesPromo = (promo) => {
   const text = currentRoundTripText();
+  if (bookingMode !== 'hourly') return promo?.roundTripOnly !== true;
   if (promo?.roundTripOnly && (bookingMode !== 'hourly' || !text.trim())) return false;
   return addressMatchesPromoValue(text, promo?.roundTripPickupMatch) &&
     addressMatchesPromoValue(text, promo?.roundTripDropoffMatch);
 };
 
+const promoCanApplyToCurrentMode = (promo) =>
+  bookingMode !== 'hourly' || promo?.roundTripOnly === true;
+
 const addressPairMatchesPromo = (promo, pickupText, destinationText) =>
+  promoCanApplyToCurrentMode(promo) &&
   pickupCityMatchesPromo(promo, pickupText) &&
   addressMatchesPromoValue(pickupText, promo?.pickupMatch) &&
   addressMatchesPromoValue(destinationText, promo?.dropoffMatch) &&
   roundTripMatchesPromo(promo);
 
 const pickupMatchesAirportPromo = (pickupText) => {
-  const text = String(pickupText || '').toUpperCase();
+  const text = normalizeLocationText(pickupText);
   return text.includes('CORONA') || text.includes('RIVERSIDE');
 };
 
 const destinationMatches99Sna = (destinationText) => {
-  const text = String(destinationText || '').toUpperCase().replace(/\s+/g, ' ');
-  return text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707');
+  const text = normalizeLocationText(destinationText);
+  return (text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707')) ||
+    text.includes('JOHN WAYNE AIRPORT') ||
+    text.includes('SNA');
 };
 
 const pickupMatchesSnaAirport = (pickupText) => {
-  const text = String(pickupText || '').toUpperCase().replace(/\s+/g, ' ');
-  return text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707');
+  const text = normalizeLocationText(pickupText);
+  return (text.includes('18601 AIRPORT WAY') && text.includes('SANTA ANA') && text.includes('92707')) ||
+    text.includes('JOHN WAYNE AIRPORT') ||
+    text.includes('SNA');
 };
 
 const destinationMatchesDisneyland = (destinationText) => {
-  const text = String(destinationText || '').toUpperCase().replace(/\s+/g, ' ');
-  return text.includes('1313 DISNEYLAND DR') && text.includes('ANAHEIM') && text.includes('92802');
+  const text = normalizeLocationText(destinationText);
+  return (text.includes('1313 DISNEYLAND DR') && text.includes('ANAHEIM') && text.includes('92802')) ||
+    text.includes('DISNEYLAND PARK');
 };
 
-const calculateAutomaticRouteDiscount = (subtotal) => {
-  if (!Number.isFinite(subtotal) || subtotal <= 0) return 0;
+const calculateLegacyAutomaticRouteDiscount = (subtotal) => {
+  if (!Number.isFinite(subtotal) || subtotal <= 0) return { code: '', discount: 0 };
+  if (bookingMode === 'hourly') return { code: '', discount: 0 };
   const pickupText = bookingForm?.querySelector('[name="pickupLocation"]')?.value || '';
   const destinationText = bookingForm?.querySelector('[name="dropoffLocation"]')?.value || '';
-  if (!pickupMatchesSnaAirport(pickupText) || !destinationMatchesDisneyland(destinationText)) return 0;
-  return Math.max(0, subtotal - 75);
+  if (!pickupMatchesSnaAirport(pickupText) || !destinationMatchesDisneyland(destinationText)) return { code: '', discount: 0 };
+  return { code: 'SNA_DISNEYLAND_AUTO', discount: Math.max(0, subtotal - 75) };
 };
 
 const calculatePromoDiscount = (subtotal, promoCode = appliedPromoCode) => {
@@ -904,6 +910,37 @@ const calculatePromoDiscount = (subtotal, promoCode = appliedPromoCode) => {
   return 0;
 };
 
+const calculateAutomaticPromoDiscount = (subtotal) => {
+  if (!Number.isFinite(subtotal) || subtotal <= 0) return { code: '', discount: 0 };
+  const bestPromo = Object.entries(pricingState.promoCodes).reduce(
+    (winner, [code, promo]) => {
+      if (!promo?.automatic) return winner;
+      const discount = calculatePromoDiscount(subtotal, code);
+      return discount > winner.discount ? { code, discount } : winner;
+    },
+    { code: '', discount: 0 }
+  );
+  const legacy = calculateLegacyAutomaticRouteDiscount(subtotal);
+  return legacy.discount > bestPromo.discount ? legacy : bestPromo;
+};
+
+const currentTripBaseTotal = () => {
+  if (!Number.isFinite(currentEstimateHours) || !Number.isFinite(currentEstimateMiles)) {
+    return null;
+  }
+  return calculateTripBaseTotal({
+    hours: currentEstimateHours,
+    miles: currentEstimateMiles,
+    serviceType: getSelectedServiceType()
+  });
+};
+
+const promoDiscountForCurrentTrip = (promoCode) => {
+  const baseTotal = currentTripBaseTotal();
+  if (!Number.isFinite(baseTotal) || baseTotal <= 0) return 0;
+  return calculatePromoDiscount(baseTotal, promoCode);
+};
+
 const syncPromoStatus = (message = '') => {
   const field = bookingForm?.querySelector('.promo-code-field');
   const button = bookingForm?.querySelector('[data-action="apply-promo"]');
@@ -928,9 +965,22 @@ const applyPromoCode = () => {
     updateEstimateDisplay();
     return;
   }
-  if (!pricingState.promoCodes[normalizedCode]) {
+  const promo = pricingState.promoCodes[normalizedCode];
+  if (!promo) {
     appliedPromoCode = '';
     syncPromoStatus('Promo code not active.');
+    updateEstimateDisplay();
+    return;
+  }
+  if (!promoCanApplyToCurrentMode(promo)) {
+    appliedPromoCode = '';
+    syncPromoStatus('This promo code is not available for round trips.');
+    updateEstimateDisplay();
+    return;
+  }
+  if (promoDiscountForCurrentTrip(normalizedCode) <= 0) {
+    appliedPromoCode = '';
+    syncPromoStatus('This promo code does not match this trip.');
     updateEstimateDisplay();
     return;
   }
@@ -1083,8 +1133,19 @@ const setupPhoneMask = () => {
 setupPhoneMask();
 
 const travelersInput = bookingForm?.querySelector('[name="travelers"]');
-const kidsInput = bookingForm?.querySelector('[name="kids"]');
-const bagsInput = bookingForm?.querySelector('[name="bags"]');
+const carryOnBagsInput = bookingForm?.querySelector('[name="carryOnBags"]');
+const checkedBagsInput = bookingForm?.querySelector('[name="checkedBags"]');
+const oversizedBagsInput = bookingForm?.querySelector('[name="oversizedBags"]');
+const forwardFacingSeatsInput = bookingForm?.querySelector('[name="forwardFacingSeats"]');
+const boosterSeatsInput = bookingForm?.querySelector('[name="boosterSeats"]');
+const passengerLuggageToggleInputs = bookingForm ? [...bookingForm.querySelectorAll('[name="hasPassengerLuggage"]')] : [];
+const passengerLuggageCounters = bookingForm?.querySelector('[data-passenger-luggage-counters]');
+const childSeatToggleInputs = bookingForm ? [...bookingForm.querySelectorAll('[name="hasChildSeats"]')] : [];
+const childSeatCounters = bookingForm?.querySelector('[data-child-seat-counters]');
+const forwardSeatCounter = bookingForm?.querySelector('[data-seat-counter="forward"]');
+const boosterSeatCounter = bookingForm?.querySelector('[data-seat-counter="booster"]');
+const luggageNote = bookingForm?.querySelector('[data-luggage-note]');
+const addOnsTotalEl = bookingForm?.querySelector('[data-addons-total]');
 
 const clampNumber = (value, min, max) =>
   Math.max(min, Math.min(max, value));
@@ -1094,47 +1155,164 @@ const getInt = (input, fallback) => {
   return Number.isNaN(parsed) ? fallback : parsed;
 };
 
+const getLuggageLimits = (oversizedBags = 0) => {
+  const isSuv = getSelectedServiceType().toLowerCase().includes('suv');
+  const maxOversized = 4;
+  const oversizedCount = clampNumber(oversizedBags, 0, maxOversized);
+  const oversizedCapacityRemaining = Math.max(0, maxOversized - oversizedCount);
+  const adjustedLimit = (base) =>
+    Math.max(0, Math.floor((base * oversizedCapacityRemaining) / maxOversized));
+  const baseCarryOnOnly = isSuv ? 6 : 4;
+  const baseCarryOnWithChecked = isSuv ? 2 : 1;
+  const baseChecked = isSuv ? 4 : 3;
+  const baseNote = isSuv
+    ? 'SUV luggage max: 6 carry-on, or 4 checked + 2 carry-on.'
+    : 'Black luggage max: 4 carry-on, or 3 checked + 1 carry-on.';
+  return {
+    passengers: isSuv ? 6 : 4,
+    carryOnOnly: adjustedLimit(baseCarryOnOnly),
+    carryOnWithChecked: adjustedLimit(baseCarryOnWithChecked),
+    checked: adjustedLimit(baseChecked),
+    oversized: maxOversized,
+    note: oversizedCount >= maxOversized
+      ? `${baseNote} 4 oversize max: no carry-on or checked bags.`
+      : oversizedCount > 0
+        ? `${baseNote} Oversize reduces carry-on and checked bag capacity.`
+        : baseNote
+  };
+};
+
+const hasChildSeatsSelected = () =>
+  (bookingForm?.querySelector('[name="hasChildSeats"]:checked')?.value || 'no') === 'yes';
+
+const hasPassengerLuggageSelected = () =>
+  (bookingForm?.querySelector('[name="hasPassengerLuggage"]:checked')?.value || 'no') === 'yes';
+
+const syncPassengerLuggageControls = () => {
+  const enabled = hasPassengerLuggageSelected();
+  if (passengerLuggageCounters) passengerLuggageCounters.hidden = !enabled;
+  if (!enabled) {
+    if (travelersInput) travelersInput.value = '1';
+    if (carryOnBagsInput) carryOnBagsInput.value = '0';
+    if (checkedBagsInput) checkedBagsInput.value = '0';
+    if (oversizedBagsInput) oversizedBagsInput.value = '0';
+  }
+};
+
+const syncChildSeatControls = () => {
+  if (!forwardFacingSeatsInput || !boosterSeatsInput) return;
+  const enabled = hasChildSeatsSelected();
+  if (childSeatCounters) childSeatCounters.hidden = !enabled;
+  const forward = getInt(forwardFacingSeatsInput, 0);
+  const booster = getInt(boosterSeatsInput, 0);
+  if (forwardSeatCounter) forwardSeatCounter.value = forward;
+  if (boosterSeatCounter) boosterSeatCounter.value = booster;
+};
+
 const enforceCounts = (changed) => {
-  if (!travelersInput || !kidsInput || !bagsInput) return;
+  if (!travelersInput || !carryOnBagsInput || !checkedBagsInput || !oversizedBagsInput || !forwardFacingSeatsInput || !boosterSeatsInput) return;
 
-  let travelers = clampNumber(getInt(travelersInput, 1), 1, 6);
-  let kids = clampNumber(getInt(kidsInput, 0), 0, 6);
-
-  if (travelers + kids > 6) {
-    if (changed === travelersInput) {
-      travelers = Math.max(1, 6 - kids);
-    } else if (changed === kidsInput) {
-      kids = Math.max(0, 6 - travelers);
+  syncPassengerLuggageControls();
+  let oversizedBags = clampNumber(getInt(oversizedBagsInput, 0), 0, 4);
+  const limits = getLuggageLimits(oversizedBags);
+  let travelers = clampNumber(getInt(travelersInput, 1), 1, limits.passengers);
+  let carryOnBags = clampNumber(getInt(carryOnBagsInput, 0), 0, limits.carryOnOnly);
+  let checkedBags = clampNumber(getInt(checkedBagsInput, 0), 0, limits.checked);
+  let forwardFacingSeats = hasChildSeatsSelected()
+    ? clampNumber(getInt(forwardSeatCounter || forwardFacingSeatsInput, 0), 0, 2)
+    : 0;
+  let boosterSeats = hasChildSeatsSelected()
+    ? clampNumber(getInt(boosterSeatCounter || boosterSeatsInput, 0), 0, 2)
+    : 0;
+  if (forwardFacingSeats + boosterSeats > 2) {
+    if (changed === boosterSeatCounter || changed === boosterSeatsInput) {
+      forwardFacingSeats = Math.max(0, 2 - boosterSeats);
     } else {
-      kids = Math.max(0, 6 - travelers);
+      boosterSeats = Math.max(0, 2 - forwardFacingSeats);
     }
   }
 
-  let bags = clampNumber(getInt(bagsInput, 0), 0, 6);
+  if (changed === carryOnBagsInput && carryOnBags > limits.carryOnWithChecked) {
+    checkedBags = 0;
+  }
+  if (checkedBags > 0) {
+    carryOnBags = Math.min(carryOnBags, limits.carryOnWithChecked);
+  }
+  if (carryOnBags > limits.carryOnWithChecked) {
+    checkedBags = 0;
+  }
 
   travelersInput.value = travelers;
-  kidsInput.value = kids;
-  bagsInput.value = bags;
+  carryOnBagsInput.value = carryOnBags;
+  checkedBagsInput.value = checkedBags;
+  oversizedBagsInput.value = oversizedBags;
+  forwardFacingSeatsInput.value = forwardFacingSeats;
+  boosterSeatsInput.value = boosterSeats;
+  travelersInput.max = String(limits.passengers);
+  carryOnBagsInput.max = String(checkedBags > 0 ? limits.carryOnWithChecked : limits.carryOnOnly);
+  checkedBagsInput.max = String(limits.checked);
+  oversizedBagsInput.max = String(limits.oversized);
+  syncChildSeatControls();
+  if (luggageNote) luggageNote.textContent = limits.note;
+  if (addOnsTotalEl) addOnsTotalEl.textContent = `$${getAddOnsTotal().toFixed(0)}`;
 };
 
-if (travelersInput && kidsInput && bagsInput) {
+const getAddOnsTotal = () =>
+  getInt(forwardFacingSeatsInput, 0) * 10 + getInt(boosterSeatsInput, 0) * 10;
+
+const getChildSeatSummary = () => {
+  const forward = getInt(forwardFacingSeatsInput, 0);
+  const booster = getInt(boosterSeatsInput, 0);
+  const parts = [];
+  if (forward > 0) parts.push(`${forward} forward-facing seat${forward === 1 ? '' : 's'}`);
+  if (booster > 0) parts.push(`${booster} booster seat${booster === 1 ? '' : 's'}`);
+  return parts.length ? parts.join(', ') : '0 car seats';
+};
+
+if (travelersInput && carryOnBagsInput && checkedBagsInput && oversizedBagsInput && forwardFacingSeatsInput && boosterSeatsInput) {
+  passengerLuggageToggleInputs.forEach((input) => {
+    input.addEventListener('change', () => {
+      syncPassengerLuggageControls();
+      enforceCounts();
+      updateEstimateDisplay();
+    });
+  });
+  childSeatToggleInputs.forEach((input) => {
+    input.addEventListener('change', () => {
+      if (input.value === 'no' && input.checked) {
+        forwardFacingSeatsInput.value = '0';
+        boosterSeatsInput.value = '0';
+        if (forwardSeatCounter) forwardSeatCounter.value = '0';
+        if (boosterSeatCounter) boosterSeatCounter.value = '0';
+      }
+      enforceCounts();
+      updateEstimateDisplay();
+    });
+  });
   ['input', 'blur'].forEach((evt) => {
     travelersInput.addEventListener(evt, () => enforceCounts(travelersInput));
-    kidsInput.addEventListener(evt, () => enforceCounts(kidsInput));
-    bagsInput.addEventListener(evt, () => enforceCounts(bagsInput));
+    carryOnBagsInput.addEventListener(evt, () => enforceCounts(carryOnBagsInput));
+    checkedBagsInput.addEventListener(evt, () => enforceCounts(checkedBagsInput));
+    oversizedBagsInput.addEventListener(evt, () => enforceCounts(oversizedBagsInput));
+    forwardFacingSeatsInput.addEventListener(evt, () => enforceCounts(forwardFacingSeatsInput));
+    boosterSeatsInput.addEventListener(evt, () => enforceCounts(boosterSeatsInput));
+    forwardSeatCounter?.addEventListener(evt, () => enforceCounts(forwardSeatCounter));
+    boosterSeatCounter?.addEventListener(evt, () => enforceCounts(boosterSeatCounter));
   });
+  ['input', 'change'].forEach((evt) => {
+    forwardFacingSeatsInput.addEventListener(evt, updateEstimateDisplay);
+    boosterSeatsInput.addEventListener(evt, updateEstimateDisplay);
+    forwardSeatCounter?.addEventListener(evt, updateEstimateDisplay);
+    boosterSeatCounter?.addEventListener(evt, updateEstimateDisplay);
+  });
+  syncPassengerLuggageControls();
+  enforceCounts();
 }
 
 const handleBookingSubmit = async (event) => {
   if (event) event.preventDefault();
   if (!bookingForm) return;
   const typedPromoCode = normalizePromoCode(bookingForm.querySelector('[name="promoCode"]')?.value || '');
-  if (typedPromoCode && pricingState.promoCodes[typedPromoCode] && typedPromoCode !== appliedPromoCode) {
-    appliedPromoCode = typedPromoCode;
-    const promoInput = bookingForm.querySelector('[name="promoCode"]');
-    if (promoInput) promoInput.value = typedPromoCode;
-    syncPromoStatus();
-  }
 
   const fullName = bookingForm.querySelector('[name="fullName"]')?.value.trim();
   const pickupDate = bookingForm
@@ -1171,12 +1349,6 @@ const handleBookingSubmit = async (event) => {
     return;
   }
 
-  const turnstileToken = customerContext.accessToken ? '' : await getBookingTurnstileToken();
-  if (!customerContext.accessToken && !turnstileToken) {
-    alert('Please complete the security check before submitting.');
-    return;
-  }
-
   const estimatedBaseTotal = verifiedEstimateHours && Number.isFinite(currentEstimateMiles)
     ? calculateTripBaseTotal({
         hours: verifiedEstimateHours,
@@ -1185,8 +1357,27 @@ const handleBookingSubmit = async (event) => {
       })
     : null;
   const estimatedTotalCents = Number.isFinite(estimatedBaseTotal)
-    ? Math.round(estimatedBaseTotal * 100)
+    ? Math.round((estimatedBaseTotal + getAddOnsTotal()) * 100)
     : null;
+  const promoInput = bookingForm.querySelector('[name="promoCode"]');
+  if (typedPromoCode && typedPromoCode !== appliedPromoCode) {
+    const typedPromo = pricingState.promoCodes[typedPromoCode];
+    if (
+      typedPromo &&
+      promoCanApplyToCurrentMode(typedPromo) &&
+      calculatePromoDiscount(estimatedBaseTotal, typedPromoCode) > 0
+    ) {
+      appliedPromoCode = typedPromoCode;
+      if (promoInput) promoInput.value = typedPromoCode;
+      syncPromoStatus();
+    } else {
+      appliedPromoCode = '';
+      syncPromoStatus(typedPromo ? 'This promo code does not match this trip.' : 'Promo code not active.');
+    }
+  } else if (appliedPromoCode && calculatePromoDiscount(estimatedBaseTotal, appliedPromoCode) <= 0) {
+    appliedPromoCode = '';
+    syncPromoStatus('This promo code does not match this trip.');
+  }
 
   const payload = {
     full_name: fullName || '',
@@ -1201,13 +1392,14 @@ const handleBookingSubmit = async (event) => {
     customer_email: customerContext.email || '',
     customer_user_id: customerContext.userId || '',
     travelers: bookingForm.querySelector('[name="travelers"]')?.value.trim() || '',
-    kids: bookingForm.querySelector('[name="kids"]')?.value.trim() || '',
-    bags: bookingForm.querySelector('[name="bags"]')?.value.trim() || '',
+    kids: getChildSeatSummary(),
+    bags: `${getInt(checkedBagsInput, 0)} checked, ${getInt(carryOnBagsInput, 0)} carry-on, ${getInt(oversizedBagsInput, 0)} oversized`,
     contact_number: bookingForm
       .querySelector('[name="contactNumber"]')
       ?.value.trim() || '',
     promo_code: appliedPromoCode,
     gratuity_percent: getSelectedGratuityPercent(),
+    route_pricing_mode: bookingMode === 'hourly' ? 'billable_legs' : 'continuous_route',
     stops: Array.from(bookingForm.querySelectorAll('.roundtrip-leg')).map((leg, index) => {
       const pickup = leg.querySelector(`[name="roundTripPickup${index}"]`);
       const dropoff = leg.querySelector(`[name="roundTripDropoff${index}"]`);
@@ -1227,7 +1419,7 @@ const handleBookingSubmit = async (event) => {
       };
     }).filter((stop) => stop.pickup || stop.dropoff),
     route_points: await resolveRoutePoints(),
-    turnstile_token: turnstileToken
+    turnstile_token: ''
   };
 
   const submitButton = bookingForm.querySelector('[data-action="email-form"]');
@@ -1273,7 +1465,6 @@ const handleBookingSubmit = async (event) => {
 
     setStatus('Request submitted for review. If approved, payment will be emailed to you.');
     bookingForm.reset();
-    resetBookingTurnstile();
     setBookingSubmissionState(true);
     return;
   } catch (error) {
@@ -1281,7 +1472,6 @@ const handleBookingSubmit = async (event) => {
       submitButton.disabled = false;
       submitButton.textContent = 'Submit for Review';
     }
-    resetBookingTurnstile();
     const message = error?.message || 'Sorry, we could not create your request at this time.';
     setStatus(message);
     alert(
@@ -1303,6 +1493,7 @@ if (bookingForm) {
         field.value = serviceType;
       });
       syncServiceTypeField();
+      enforceCounts();
       updateEstimateDisplay();
     });
   });
@@ -1411,12 +1602,20 @@ const calculateRouteMetrics = (points) => {
 
   if (usablePoints.length < 2) return null;
 
+  const billablePairs = bookingMode === 'hourly'
+    ? Array.from({ length: Math.floor(usablePoints.length / 2) }, (_, index) => [
+        usablePoints[index * 2],
+        usablePoints[index * 2 + 1]
+      ]).filter(([pickup, dropoff]) => pickup && dropoff)
+    : usablePoints.slice(0, -1).map((point, index) => [point, usablePoints[index + 1]]);
+  if (!billablePairs.length) return null;
+
   let miles = 0;
-  for (let index = 0; index < usablePoints.length - 1; index += 1) {
-    miles += haversineMiles(usablePoints[index], usablePoints[index + 1]);
+  for (const [pickup, dropoff] of billablePairs) {
+    miles += haversineMiles(pickup, dropoff);
   }
 
-  const stopCount = Math.max(0, usablePoints.length - 2);
+  const stopCount = bookingMode === 'hourly' ? Math.max(0, billablePairs.length - 1) : Math.max(0, usablePoints.length - 2);
   const drivingMinutes = (miles / ESTIMATE_SPEED_MPH) * 60 * 1.28;
   const totalMinutes =
     drivingMinutes + ESTIMATE_MINUTES_BUFFER + stopCount * ESTIMATE_MINUTES_PER_STOP;
@@ -1447,6 +1646,7 @@ async function updateEstimateDisplay() {
     if (originalTotalEl) originalTotalEl.textContent = '$0.00';
     document.querySelectorAll('[data-vehicle-price]').forEach((node) => {
       node.textContent = 'Select route';
+      node.classList.remove('is-promo-struck');
     });
     return null;
   }
@@ -1458,7 +1658,10 @@ async function updateEstimateDisplay() {
       miles: routeMetrics.miles,
       serviceType
     });
+    const automaticPromo = calculateAutomaticPromoDiscount(vehicleBase);
+    const vehiclePromoDiscount = Math.max(automaticPromo.discount, calculatePromoDiscount(vehicleBase));
     node.textContent = Number.isFinite(vehicleBase) ? `$${(vehicleBase * 1.10).toFixed(2)}` : 'Select route';
+    node.classList.toggle('is-promo-struck', Number.isFinite(vehicleBase) && vehiclePromoDiscount > 0);
   });
 
   const baseTotal = calculateTripBaseTotal({
@@ -1466,17 +1669,23 @@ async function updateEstimateDisplay() {
     miles: routeMetrics.miles,
     serviceType: getSelectedServiceType()
   });
-  const automaticRouteDiscount = calculateAutomaticRouteDiscount(baseTotal);
-  const promoDiscount = calculatePromoDiscount(baseTotal);
-  const totalDiscount = Math.max(automaticRouteDiscount, promoDiscount);
+  const automaticPromo = calculateAutomaticPromoDiscount(baseTotal);
+  let promoDiscount = calculatePromoDiscount(baseTotal);
+  if (appliedPromoCode && promoDiscount <= 0) {
+    appliedPromoCode = '';
+    syncPromoStatus('This promo code does not match this trip.');
+    promoDiscount = 0;
+  }
+  const totalDiscount = Math.max(automaticPromo.discount, promoDiscount);
   const discountedBaseTotal = Math.max(0, baseTotal - totalDiscount);
   const gratuityTotal = Math.round(baseTotal * getSelectedGratuityPercent()) / 100;
-  const originalTotal = baseTotal * 1.10 + gratuityTotal;
-  const estimatedTotal = discountedBaseTotal + gratuityTotal;
+  const addOnsTotal = getAddOnsTotal();
+  const originalTotal = baseTotal * 1.10 + gratuityTotal + addOnsTotal;
+  const estimatedTotal = discountedBaseTotal + gratuityTotal + addOnsTotal;
   estimateHoursEl.textContent = formatEstimateHours(routeMetrics.hours);
   if (originalTotalEl) originalTotalEl.textContent = `$${originalTotal.toFixed(2)}`;
-  estimateTotalEl.textContent = automaticRouteDiscount > 0 && automaticRouteDiscount >= promoDiscount
-    ? `$${estimatedTotal.toFixed(2)} (SNA to Disneyland)`
+  estimateTotalEl.textContent = automaticPromo.discount > 0 && automaticPromo.discount >= promoDiscount
+    ? `$${estimatedTotal.toFixed(2)} (${automaticPromo.code})`
     : promoDiscount > 0
     ? `$${estimatedTotal.toFixed(2)} (${appliedPromoCode})`
     : `$${estimatedTotal.toFixed(2)}`;
@@ -1509,5 +1718,3 @@ document.addEventListener('click', (event) => {
     }
   }
 });
-
-void initBookingTurnstile();
