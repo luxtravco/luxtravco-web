@@ -637,7 +637,7 @@ const DEFAULT_SOCAL_CITIES = [
 ];
 const DEFAULT_PROMO_CODES = [
   { code: '10OFF', type: 'percent', percent: 10 },
-  { code: '149LAX', type: 'fixed_route_total', amount_cents: 14900, route_match: 'LAX', pickup_cities: ['Corona', 'Riverside'], automatic: true },
+  { code: '149LAX', type: 'fixed_route_total', amount_cents: 14900, route_match: 'LAX', pickup_cities: ['Corona', 'Riverside', 'Anaheim'], automatic: false },
   { code: '99SNA', type: 'fixed_route_total', amount_cents: 9900, route_match: 'SNA', pickup_cities: ['Corona', 'Riverside'], automatic: true },
   { code: 'SNA_DISNEYLAND_AUTO', type: 'fixed_route_total', amount_cents: 7500, pickup_match: 'SNA', dropoff_match: 'Disneyland', automatic: true }
 ];
@@ -2490,9 +2490,6 @@ const calculatePromoDiscountCents = ({ promoCode, subtotalCents, promoCodes = DE
   }
   if (promo?.type === 'fixed_route_total') {
     if (!addressPairMatchesPromo(promo, pickupText, destinationText, bookingMode, roundTripText)) {
-      return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
-    }
-    if ((normalizedCode === '149LAX' || normalizedCode === '99SNA') && !pickupMatchesAirportPromo(pickupText)) {
       return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
     }
     if (normalizedCode === '99SNA' && !destinationMatches99Sna(destinationText)) {

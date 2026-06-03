@@ -11,7 +11,7 @@ const ESTIMATE_MINUTES_BUFFER = 18;
 const ESTIMATE_MINUTES_PER_STOP = 8;
 const PROMO_CODES = {
   '10OFF': { type: 'percent', amount: 10, label: '10% off' },
-  '149LAX': { type: 'fixed_route_total', amountCents: 14900, routeMatch: 'LAX', pickupCities: ['Corona', 'Riverside'], automatic: true, label: '$149 LAX' },
+  '149LAX': { type: 'fixed_route_total', amountCents: 14900, routeMatch: 'LAX', pickupCities: ['Corona', 'Riverside', 'Anaheim'], automatic: false, label: '$149 LAX' },
   '99SNA': { type: 'fixed_route_total', amountCents: 9900, routeMatch: 'SNA', pickupCities: ['Corona', 'Riverside'], automatic: true, label: '$99 SNA' },
   'SNA_DISNEYLAND_AUTO': { type: 'fixed_route_total', amountCents: 7500, pickupMatch: 'SNA', dropoffMatch: 'Disneyland', automatic: true, label: '$75 SNA to Disneyland' }
 };
@@ -901,7 +901,6 @@ const calculatePromoDiscount = (subtotal, promoCode = appliedPromoCode) => {
       bookingForm?.querySelector('[name="dropoffLocation"]')?.value || '',
       ...Array.from(bookingForm?.querySelectorAll('.roundtrip-leg input[type="text"]') || []).map((input) => input.value || '')
     ].join(' ').toUpperCase();
-    if ((normalizedCode === '149LAX' || normalizedCode === '99SNA') && !pickupMatchesAirportPromo(pickupText)) return 0;
     if (normalizedCode === '99SNA' && !destinationMatches99Sna(destinationText)) return 0;
     if (!addressPairMatchesPromo(promo, pickupText, destinationText)) return 0;
     if (!destinationMatchesPromo(promo, destinationText)) return 0;
