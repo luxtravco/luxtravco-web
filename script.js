@@ -1657,10 +1657,8 @@ async function updateEstimateDisplay() {
       miles: routeMetrics.miles,
       serviceType
     });
-    const automaticPromo = calculateAutomaticPromoDiscount(vehicleBase);
-    const vehiclePromoDiscount = Math.max(automaticPromo.discount, calculatePromoDiscount(vehicleBase));
     node.textContent = Number.isFinite(vehicleBase) ? `$${(vehicleBase * 1.10).toFixed(2)}` : 'Select route';
-    node.classList.toggle('is-promo-struck', Number.isFinite(vehicleBase) && vehiclePromoDiscount > 0);
+    node.classList.toggle('is-promo-struck', Number.isFinite(vehicleBase));
   });
 
   const baseTotal = calculateTripBaseTotal({
