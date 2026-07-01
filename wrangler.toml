@@ -9,3 +9,19 @@ database_id = "f4af986f-9d2e-4fd5-ad28-067973492a4c"
 
 [triggers]
 crons = ["*/15 * * * *"]
+
+[env.test]
+name = "luxtravco-booking-test"
+
+[env.test.vars]
+ENVIRONMENT = "test"
+SITE_URL = "https://luxtravco.com"
+BOOKING_API_URL = "https://luxtravco-booking-test.luxtravco1.workers.dev"
+
+[[env.test.d1_databases]]
+binding = "DB"
+database_name = "luxtravco_bookings_test"
+database_id = "80370d21-3142-46fe-a806-86ed5be87829"
+
+[env.test.triggers]
+crons = []

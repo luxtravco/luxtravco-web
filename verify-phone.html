@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phone verification</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    body {margin:0;padding:0;display:flex;justify-content:center;align-items:center;height:100vh;background:#080807;color:#f7f2e8;font-family:'Inter',sans-serif;}
+    .card {background:#11100f;border:1px solid #2b2419;border-radius:22px;padding:2rem;max-width:400px;width:100%;box-shadow:0 22px 60px rgba(0,0,0,0.38);}
+    h1 {margin:0 0 1rem;color:#fff7e8;font-size:1.8rem;font-weight:600;}
+    input {width:100%;padding:0.6rem 0.8rem;margin:0.5rem 0;border:none;border-radius:6px;background:#1b160f;color:#f7f2e8;}
+    button {width:100%;padding:0.7rem;background:#f0b247;color:#11100f;border:none;border-radius:6px;font-weight:600;cursor:pointer;}
+    .link {margin-top:1rem;text-align:center;font-size:0.9rem;}
+    .link a {color:#f0b247;text-decoration:none;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Verify your phone</h1>
+    <p>Enter a phone number to receive a verification code.</p>
+    <input type="tel" id="phone" placeholder="+1 555‑123‑4567" />
+    <label style="display:flex;align-items:center;margin-top:8px;">
+      <input type="checkbox" id="agreeSms" style="margin-right:8px;" />
+      I Agree for Luxtravco to send me SMS Messages for Booking Confirmations and OTP Request
+    </label>
+    <button id="sendCode">Send code</button>
+    <div id="codeSection" style="display:none; margin-top:1rem;">
+      <input type="text" id="code" placeholder="Enter 6‑digit code" maxlength="6" />
+      <button id="verify">Verify code</button>
+    </div>
+    <div class="link"><a href="/customer.html">Back to app</a></div>
+  </div>
+  <script src="/customer.js"></script>
+  <script>
+    const phoneInput = document.getElementById('phone');
+    const sendBtn = document.getElementById('sendCode');
+    const codeSection = document.getElementById('codeSection');
+    const verifyBtn = document.getElementById('verify');
+    const codeInput = document.getElementById('code');
+    let pendingPhone = null;
+    async function getSupabase(){
+      const client = window.luxSupabaseReady ? await window.luxSupabaseReady : window.luxSupabase;
+      if(!client){alert('Supabase not loaded');throw new Error('Supabase missing');}
+      return client;
+    }
+    sendBtn.addEventListener('click', async () => {
+      const phone = phoneInput.value.trim();
+      if (!phone) return alert('Enter a phone number');
+      try {
+        await sendPhoneVerificationCode(phone);
+        pendingPhone = phone;
+        codeSection.style.display = 'block';
+        alert('Verification code sent');
+      } catch (e) {
+        alert(e.message || 'Failed to send code');
+      }
+    });
+    verifyBtn.addEventListener('click', async () => {
+      const code = codeInput.value.trim();
+      if (!pendingPhone) return alert('Phone not sent');
+      if (!code) return alert('Enter the verification code');
+      try {
+        await verifyPhoneCode(pendingPhone, code);
+        const supabase = await getSupabase();
+        await supabase.auth.updateUser({ data: { phone_verified: true } });
+        const redirect = sessionStorage.getItem('postVerifyRedirect') || '/customer.html';
+        sessionStorage.removeItem('postVerifyRedirect');
+        window.location.href = redirect;
+      } catch (e) {
+        alert(e.message || 'Verification failed');
+      }
+    });
+  </script>
+</body>
+</html>

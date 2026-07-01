@@ -843,6 +843,13 @@ const addressPairMatchesPromo = (promo, pickupText, destinationText) =>
   addressMatchesPromoValue(destinationText, promo?.dropoffMatch) &&
   roundTripMatchesPromo(promo);
 
+const fixedRoutePromoMatches = (promo, pickupText, destinationText) =>
+  promoCanApplyToCurrentMode(promo) &&
+  pickupCityMatchesPromo(promo, pickupText) &&
+  addressMatchesPromoValue(pickupText, promo?.pickupMatch) &&
+  roundTripMatchesPromo(promo) &&
+  (addressMatchesPromoValue(destinationText, promo?.dropoffMatch) || destinationMatchesPromo(promo, destinationText));
+
 const pickupMatchesAirportPromo = (pickupText) => {
   const text = normalizeLocationText(pickupText);
   return text.includes('CORONA') || text.includes('RIVERSIDE');
@@ -902,8 +909,7 @@ const calculatePromoDiscount = (subtotal, promoCode = appliedPromoCode) => {
       ...Array.from(bookingForm?.querySelectorAll('.roundtrip-leg input[type="text"]') || []).map((input) => input.value || '')
     ].join(' ').toUpperCase();
     if (normalizedCode === '99SNA' && !destinationMatches99Sna(destinationText)) return 0;
-    if (!addressPairMatchesPromo(promo, pickupText, destinationText)) return 0;
-    if (!destinationMatchesPromo(promo, destinationText)) return 0;
+    if (!fixedRoutePromoMatches(promo, pickupText, destinationText)) return 0;
     return Math.max(0, subtotal - promo.amountCents / 100);
   }
   return 0;
@@ -1675,10 +1681,12 @@ async function updateEstimateDisplay() {
   }
   const totalDiscount = Math.max(automaticPromo.discount, promoDiscount);
   const discountedBaseTotal = Math.max(0, baseTotal - totalDiscount);
-  const gratuityTotal = Math.round(baseTotal * getSelectedGratuityPercent()) / 100;
+  const gratuityPercent = getSelectedGratuityPercent();
+  const originalGratuityTotal = Math.round(baseTotal * gratuityPercent) / 100;
+  const discountedGratuityTotal = Math.round(discountedBaseTotal * gratuityPercent) / 100;
   const addOnsTotal = getAddOnsTotal();
-  const originalTotal = baseTotal * 1.10 + gratuityTotal + addOnsTotal;
-  const estimatedTotal = discountedBaseTotal + gratuityTotal + addOnsTotal;
+  const originalTotal = baseTotal * 1.10 + originalGratuityTotal + addOnsTotal;
+  const estimatedTotal = discountedBaseTotal + discountedGratuityTotal + addOnsTotal;
   estimateHoursEl.textContent = formatEstimateHours(routeMetrics.hours);
   if (originalTotalEl) originalTotalEl.textContent = `$${originalTotal.toFixed(2)}`;
   estimateTotalEl.textContent = automaticPromo.discount > 0 && automaticPromo.discount >= promoDiscount

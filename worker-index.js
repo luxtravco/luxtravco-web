@@ -58,6 +58,14 @@ const ordinalWord = (value) => {
   return words[value - 1] || `${value}th`;
 };
 
+const UUID = () => {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
 const sendSlack = async (env, message) => {
   const webhook = env.SLACK_WEBHOOK_URL;
   if (!webhook) return;
@@ -107,6 +115,75 @@ const sendLuxEmail = async (env, { to, subject, text, html, headers }) => {
     return { ok: true, result };
   } catch (error) {
     return { ok: false, error: error?.message || 'Failed to send email.' };
+  }
+};
+
+const normalizeSmsPhone = (value) => {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return digits.startsWith('+') ? digits : `+${digits}`;
+};
+
+const handleInboundSms = async (env, request) => {
+  const formData = await request.formData();
+  const body = formData.get('Body')?.toString().toLowerCase().trim();
+  const fromRaw = formData.get('From')?.toString();
+  const from = normalizeSmsPhone(fromRaw);
+
+  if (['stop', 'quit', 'unsubscribe', 'cancel'].includes(body)) {
+    await env.DB.prepare('UPDATE customer_profiles SET sms_opt_out = 1 WHERE phone = ?')
+      .bind(from)
+      .run();
+  } else if (['start', 'yes', 'resume', 'subscribe'].includes(body)) {
+    await env.DB.prepare('UPDATE customer_profiles SET sms_opt_out = 0 WHERE phone = ?')
+      .bind(from)
+      .run();
+  }
+
+  // Respond with empty TwiML to acknowledge receipt
+  return new Response('<Response></Response>', { headers: { 'Content-Type': 'text/xml' } });
+};
+
+const sendLuxSms = async (env, { to, body, booking, eventType = 'transactional' }) => {
+  // Check if the recipient has opted out of SMS
+  const normalizedPhone = normalizeSmsPhone(to);
+  const profile = await env.DB.prepare('SELECT sms_opt_out FROM customer_profiles WHERE phone = ?')
+    .bind(normalizedPhone)
+    .first();
+  if (profile?.sms_opt_out) {
+    return { ok: false, error: 'Customer has opted out of SMS.' };
+  }
+  
+  // Ensure Twilio is configured
+  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
+    return { ok: false, error: 'Twilio is not configured.' };
+  }
+
+  const payload = new URLSearchParams({
+    To: normalizeSmsPhone(to),
+    From: '+18444847433',
+    Body: body,
+  });
+
+  const authHeader = 'Basic ' + btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
+  try {
+    const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`, {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: payload,
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      return { ok: false, error: 'Failed to send SMS via Twilio.', rawResponse: errText };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e?.message || 'Unexpected error sending SMS.' };
   }
 };
 
@@ -301,6 +378,8 @@ const bookingDetailsLines = (booking) => [
   `Pickup: ${booking.pickup_location || '—'}`,
   `Drop off: ${booking.dropoff_location || '—'}`,
   `Stops: ${parseStopsText(booking.stops || '') || 'None'}`,
+  booking.airline ? `Airline: ${booking.airline}` : null,
+  booking.terminal ? `Terminal: ${booking.terminal}` : null,
   `Service type: ${booking.service_type || '—'}`,
   `Booking mode: ${booking.booking_mode || '—'}`,
   `Estimated hours: ${booking.estimated_hours || '—'}`,
@@ -435,6 +514,53 @@ const sendPaymentApprovedCustomerEmail = async (env, booking) => {
 
 const sendPaymentReceivedCustomerEmail = sendPaymentApprovedCustomerEmail;
 
+const markSmsSent = async (env, bookingId, column) => {
+  await ensureBookingColumns(env);
+  await env.DB.prepare(`UPDATE bookings SET ${column} = ? WHERE id = ?`)
+    .bind(new Date().toISOString(), bookingId)
+    .run();
+};
+
+const sendApprovalBookingSms = async (env, booking, checkoutUrl) => {
+  if (!checkoutUrl) return { ok: true, skipped: true };
+  return sendLuxSms(env, {
+    booking,
+    eventType: 'approval_payment_link',
+    body: `Luxtravco booking #${booking.id || ''} is approved for payment. Total ${formatCurrency(booking.estimated_total_cents || 0)}. Pay here: ${checkoutUrl}`
+  });
+};
+
+const sendPaidBookingSms = async (env, booking) => {
+  const total = formatCurrency(booking.estimated_total_cents || 0);
+  return sendLuxSms(env, {
+    booking,
+    eventType: 'paid_confirmation',
+    body: `Luxtravco booking #${booking.id || ''} is confirmed. Total paid ${total}. Pickup: ${booking.pickup_date || '—'}${booking.pickup_time ? ` at ${booking.pickup_time}` : ''}. Reply STOP to unsubscribe. Reply START to resubscribe to this number.`
+  });
+};
+
+const sendCancellationBookingSms = async (env, booking, policy) => {
+  const refundPercent = Number(policy?.refundPercent ?? booking.cancellation_refund_percent ?? 0);
+  return sendLuxSms(env, {
+    booking,
+    eventType: 'cancellation',
+    body: `Luxtravco booking #${booking.id || ''} was cancelled. Refund eligibility: ${refundPercent}%. Contact info@luxtravco.com with questions.`
+  });
+};
+
+const sendReminderBookingSms = async (env, booking, reminderType) => {
+  const reminderLabel = reminderType === 'day_of'
+    ? 'day-of reminder'
+    : reminderType === 'ninety_minutes'
+      ? 'pickup reminder'
+      : 'trip reminder';
+  return sendLuxSms(env, {
+    booking,
+    eventType: `reminder_${reminderType}`,
+    body: `Luxtravco ${reminderLabel}: pickup ${booking.pickup_date || '—'}${booking.pickup_time ? ` at ${booking.pickup_time}` : ''}. Route: ${booking.pickup_location || '—'} to ${booking.dropoff_location || '—'}.`
+  });
+};
+
 const sendAccountDeletedAdminEmail = async (env, customer) => {
   const email = String(customer?.email || '').trim().toLowerCase();
   const userId = String(customer?.userId || '').trim();
@@ -544,7 +670,7 @@ const sendBookingCancelledEmails = async (env, booking, policy) => {
   return failed || { ok: true, results };
 };
 
-const approveBookingAndEmail = async (env, booking) => {
+const approveBookingAndEmail = async (env, booking, ctx = null) => {
   const totalCents = Number(booking.estimated_total_cents || 0);
   if (!Number.isFinite(totalCents) || totalCents <= 0) {
     return { ok: false, error: 'Booking total is invalid' };
@@ -585,6 +711,10 @@ const approveBookingAndEmail = async (env, booking) => {
   )
     .bind('approved_email_sent', checkout.id || '', checkout.url || '', booking.id)
     .run();
+
+  if (ctx) {
+    ctx.waitUntil(sendApprovalBookingSms(env, booking, checkout.url));
+  }
 
   return { ok: true, checkoutUrl: checkout.url };
 };
@@ -640,6 +770,43 @@ const DEFAULT_PROMO_CODES = [
   { code: '149LAX', type: 'fixed_route_total', amount_cents: 14900, route_match: 'LAX', pickup_cities: ['Corona', 'Riverside', 'Anaheim'], automatic: false },
   { code: '99SNA', type: 'fixed_route_total', amount_cents: 9900, route_match: 'SNA', pickup_cities: ['Corona', 'Riverside'], automatic: true },
   { code: 'SNA_DISNEYLAND_AUTO', type: 'fixed_route_total', amount_cents: 7500, pickup_match: 'SNA', dropoff_match: 'Disneyland', automatic: true }
+];
+const DEFAULT_AIRPORT_TERMINAL_OPTIONS = [
+  {
+    airport_code: 'LAX',
+    airport_name: 'Los Angeles International Airport',
+    terminals: ['Terminal 1', 'Terminal 2', 'Terminal 3', 'Terminal 4', 'Terminal 5', 'Terminal 6', 'Terminal 7', 'Terminal 8', 'Tom Bradley International Terminal']
+  },
+  {
+    airport_code: 'SNA',
+    airport_name: 'John Wayne Airport',
+    terminals: ['Terminal A', 'Terminal B', 'Terminal C']
+  },
+  {
+    airport_code: 'ONT',
+    airport_name: 'Ontario International Airport',
+    terminals: ['Terminal 2', 'Terminal 4', 'International Arrivals']
+  },
+  {
+    airport_code: 'LGB',
+    airport_name: 'Long Beach Airport',
+    terminals: ['Main Terminal']
+  },
+  {
+    airport_code: 'BUR',
+    airport_name: 'Hollywood Burbank Airport',
+    terminals: ['Terminal A', 'Terminal B']
+  },
+  {
+    airport_code: 'SAN',
+    airport_name: 'San Diego International Airport',
+    terminals: ['Terminal 1', 'Terminal 2']
+  },
+  {
+    airport_code: 'PSP',
+    airport_name: 'Palm Springs International Airport',
+    terminals: ['Main Terminal']
+  }
 ];
 const LEGACY_FEATURED_ROUTES = [
   { key: 'route_1', label: 'LGB → Disneyland', price: 99, image_url: '' },
@@ -886,6 +1053,10 @@ const ensureBookingColumns = async (env) => {
       ['paid_at', 'TEXT'],
       ['paid_notification_sent_at', 'TEXT'],
       ['payment_receipt_sent_at', 'TEXT'],
+      ['approval_sms_sent_at', 'TEXT'],
+      ['paid_sms_sent_at', 'TEXT'],
+      ['reminder_sms_sent_at', 'TEXT'],
+      ['cancellation_sms_sent_at', 'TEXT'],
       ['customer_email', 'TEXT'],
       ['customer_user_id', 'TEXT'],
       ['driver_status', 'TEXT'],
@@ -895,7 +1066,15 @@ const ensureBookingColumns = async (env) => {
       ['promo_discount_cents', 'INTEGER'],
       ['original_total_cents', 'INTEGER'],
       ['gratuity_percent', 'INTEGER'],
-      ['gratuity_cents', 'INTEGER']
+      ['gratuity_cents', 'INTEGER'],
+      ['airline', 'TEXT'],
+      ['terminal', 'TEXT'],
+      ['guest_session_id', 'TEXT'],
+      ['is_guest_booking', 'INTEGER'],
+      ['travelers', 'TEXT'],
+      ['kids', 'TEXT'],
+      ['bags', 'TEXT'],
+      ['contact_number', 'TEXT']
     ];
 
     for (const [name, type] of additions) {
@@ -998,8 +1177,11 @@ const ensureCrmTables = async (env) => {
         customer_user_id TEXT,
         full_name TEXT,
         phone TEXT,
+        home_address TEXT DEFAULT '',
+        work_address TEXT DEFAULT '',
         tags TEXT DEFAULT '',
         notes TEXT DEFAULT '',
+        sms_opt_out INTEGER DEFAULT 0,
         status TEXT DEFAULT 'active',
         last_booking_at TEXT,
         created_at TEXT NOT NULL,
@@ -1014,9 +1196,35 @@ const ensureCrmTables = async (env) => {
         'ALTER TABLE customer_profiles ADD COLUMN customer_key TEXT'
       ).run();
     }
+    if (!columns.has('home_address')) {
+      await env.DB.prepare(
+        "ALTER TABLE customer_profiles ADD COLUMN home_address TEXT DEFAULT ''"
+      ).run();
+    }
+    if (!columns.has('work_address')) {
+      await env.DB.prepare(
+        "ALTER TABLE customer_profiles ADD COLUMN work_address TEXT DEFAULT ''"
+      ).run();
+    }
+    if (!columns.has('phone_verified')) {
+      await env.DB.prepare(
+        'ALTER TABLE customer_profiles ADD COLUMN phone_verified INTEGER DEFAULT 0'
+      ).run();
+    }
 
     await env.DB.prepare(
       'CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_profiles_customer_key ON customer_profiles(customer_key)'
+    ).run();
+
+    // Create phone verification codes table
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS phone_verification_codes (
+        user_id TEXT PRIMARY KEY,
+        phone TEXT NOT NULL,
+        code TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )`
     ).run();
   })();
 
@@ -1048,6 +1256,7 @@ const ensurePricingSettings = async (env) => {
       ['socal_cities', DEFAULT_SOCAL_CITIES.join('\n')],
       ['promo_codes', JSON.stringify(DEFAULT_PROMO_CODES)],
       ['route_count', String(DEFAULT_FEATURED_ROUTES.length)],
+      ['phone_verification_enabled', 'true'],
       ...DEFAULT_FEATURED_ROUTES.flatMap((route) => [
         [`${route.key}_label`, route.label],
         [`${route.key}_price`, String(route.price)]
@@ -1799,6 +2008,8 @@ const getPricingSettings = async (env) => {
     serviceTypes,
     defaultServiceType: serviceTypes.includes(defaultServiceType) ? defaultServiceType : serviceTypes[0],
     featuredRoutes,
+    airportTerminalOptions: DEFAULT_AIRPORT_TERMINAL_OPTIONS,
+    terminalDropdownRequired: true,
     socalServiceAreaEnabled,
     socalCities,
     promoCodes,
@@ -2346,18 +2557,22 @@ const ensureCustomerProfile = async (env, booking) => {
       customer_user_id,
       full_name,
       phone,
+      home_address,
+      work_address,
       tags,
       notes,
       status,
       last_booking_at,
       created_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(customer_key) DO UPDATE SET
       customer_email = excluded.customer_email,
       customer_user_id = excluded.customer_user_id,
       full_name = COALESCE(NULLIF(excluded.full_name, ''), customer_profiles.full_name),
       phone = COALESCE(NULLIF(excluded.phone, ''), customer_profiles.phone),
+      home_address = COALESCE(NULLIF(excluded.home_address, ''), customer_profiles.home_address),
+      work_address = COALESCE(NULLIF(excluded.work_address, ''), customer_profiles.work_address),
       last_booking_at = excluded.last_booking_at,
       updated_at = excluded.updated_at`
   )
@@ -2367,6 +2582,8 @@ const ensureCustomerProfile = async (env, booking) => {
       booking.customer_user_id || '',
       booking.full_name || '',
       booking.contact_number || '',
+      booking.home_address || '',
+      booking.work_address || '',
       '',
       '',
       'active',
@@ -2446,6 +2663,13 @@ const addressPairMatchesPromo = (promo, pickupText, destinationText, bookingMode
   addressMatchesPromoValue(destinationText, promo?.dropoff_match) &&
   roundTripMatchesPromo(promo, bookingMode, roundTripText);
 
+const fixedRoutePromoMatches = (promo, pickupText, destinationText, bookingMode = '', roundTripText = '') =>
+  promoCanApplyToBookingMode(promo, bookingMode) &&
+  pickupCityMatchesPromo(promo, pickupText) &&
+  addressMatchesPromoValue(pickupText, promo?.pickup_match) &&
+  roundTripMatchesPromo(promo, bookingMode, roundTripText) &&
+  (addressMatchesPromoValue(destinationText, promo?.dropoff_match) || destinationMatchesPromo(promo, destinationText));
+
 const pickupMatchesAirportPromo = (pickupText) => {
   const text = normalizeLocationText(pickupText);
   return text.includes('CORONA') || text.includes('RIVERSIDE');
@@ -2489,13 +2713,10 @@ const calculatePromoDiscountCents = ({ promoCode, subtotalCents, promoCodes = DE
     return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
   }
   if (promo?.type === 'fixed_route_total') {
-    if (!addressPairMatchesPromo(promo, pickupText, destinationText, bookingMode, roundTripText)) {
+    if (!fixedRoutePromoMatches(promo, pickupText, destinationText, bookingMode, roundTripText)) {
       return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
     }
     if (normalizedCode === '99SNA' && !destinationMatches99Sna(destinationText)) {
-      return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
-    }
-    if (!destinationMatchesPromo(promo, destinationText)) {
       return { promoCode: normalizedCode, discountCents: 0, totalCents: subtotal };
     }
     const fixedTotal = Math.max(0, Number(promo.amount_cents || 0));
@@ -2617,6 +2838,8 @@ const loadCustomerProfileForAuth = async (env, authPayload) => {
     customer_user_id: profile?.customer_user_id || userId,
     full_name: profile?.full_name || fallbackName,
     phone: profile?.phone || authPayload?.phone || '',
+    home_address: profile?.home_address || '',
+    work_address: profile?.work_address || '',
     status: profile?.status || 'active',
     needs_phone: !String(profile?.phone || authPayload?.phone || '').trim()
   };
@@ -4028,6 +4251,8 @@ const serializeAdminBooking = (booking) => ({
   travelers: booking.travelers || '',
   kids: booking.kids || '',
   bags: booking.bags || '',
+  airline: booking.airline || '',
+  terminal: booking.terminal || '',
   contact_number: booking.contact_number || '',
   customer_email: booking.customer_email || '',
   created_at: booking.created_at || ''
@@ -4045,6 +4270,8 @@ const serializeDriverTrip = (booking) => ({
   total: formatCurrency(booking.estimated_total_cents || 0),
   childSeats: booking.kids || '',
   luggage: booking.bags || '',
+  airline: booking.airline || '',
+  terminal: booking.terminal || '',
   note: parseStopsText(booking.stops || '') || (booking.booking_mode === 'hourly' ? 'Hourly booking' : 'Transfer booking')
 });
 
@@ -4913,11 +5140,93 @@ export default {
       url.pathname === '/admin/inbox/reply' ||
       url.pathname === '/crm' ||
       url.pathname === '/crm/export' ||
-      url.pathname === '/crm/profile'
+      url.pathname === '/crm/profile' ||
+      url.pathname === '/sms'
     ) {
       const auth = parseBasicAuth(request.headers.get('Authorization'));
-      if (!auth || auth.user !== 'admin' || auth.pass !== env.ADMIN_PASSWORD) {
+      const adminUsername = String(env.ADMIN_USERNAME || 'admin');
+      if (!auth || auth.user !== adminUsername || auth.pass !== env.ADMIN_PASSWORD) {
         return unauthorized();
+      }
+    }
+
+if (url.pathname === '/sms') {
+  if (request.method !== 'POST') {
+    return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+  }
+  return handleInboundSms(env, request);
+}
+
+    if (url.pathname === '/api/config/verification-settings') {
+      if (request.method !== 'GET') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      try {
+        await ensurePricingSettings(env);
+        const { results } = await env.DB.prepare(
+          'SELECT setting_value FROM pricing_settings WHERE setting_key = ?'
+        ).bind('phone_verification_enabled').all();
+        
+        const phoneVerificationEnabled = results?.[0]?.setting_value !== 'false';
+        
+        return jsonResponse({
+          ok: true,
+          settings: {
+            phone_verification_enabled: phoneVerificationEnabled
+          }
+        }, 200, origin);
+      } catch (error) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: `Unable to fetch verification settings: ${error?.message || 'Unknown error'}`
+          },
+          500,
+          origin
+        );
+      }
+    }
+
+    if (url.pathname === '/api/config/verification-settings/toggle') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      // Verify admin access
+      const basicAuth = parseBasicAuth(request.headers.get('Authorization') || '');
+      if (!basicAuth || basicAuth.user !== 'admin' || basicAuth.pass !== env.ADMIN_PASSWORD) {
+        return unauthorized();
+      }
+
+      try {
+        let payload;
+        try {
+          payload = await request.json();
+        } catch (error) {
+          return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+        }
+
+        const enabled = Boolean(payload?.enabled);
+        await ensurePricingSettings(env);
+        await env.DB.prepare(
+          'UPDATE pricing_settings SET setting_value = ?, updated_at = ? WHERE setting_key = ?'
+        ).bind(enabled ? 'true' : 'false', new Date().toISOString(), 'phone_verification_enabled').run();
+
+        return jsonResponse({
+          ok: true,
+          message: `Phone verification ${enabled ? 'enabled' : 'disabled'}`,
+          settings: { phone_verification_enabled: enabled }
+        }, 200, origin);
+      } catch (error) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: `Unable to toggle phone verification: ${error?.message || 'Unknown error'}`
+          },
+          500,
+          origin
+        );
       }
     }
 
@@ -4959,18 +5268,35 @@ export default {
       }
 
       try {
-        const authPayload = await verifySupabaseAccessToken(token);
-        if (!authPayload) {
-          return jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin);
+        // Check if it's a guest session token
+        const isGuestToken = token.startsWith('guest_');
+        let authPayload = null;
+        let guestSessionId = null;
+
+        if (isGuestToken) {
+          guestSessionId = token.replace('guest_', '');
+          // For guest, we allow profile operations without strict validation
+        } else {
+          authPayload = await verifySupabaseAccessToken(token);
+          if (!authPayload) {
+            return jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin);
+          }
         }
 
-        const email = String(authPayload.email || '').trim().toLowerCase();
-        const userId = String(authPayload.sub || authPayload.user_id || '').trim();
-        if (!email && !userId) {
-          return jsonResponse({ ok: false, error: 'Customer account is missing an email.' }, 400, origin);
+        const email = isGuestToken ? '' : String(authPayload.email || '').trim().toLowerCase();
+        const userId = isGuestToken ? '' : String(authPayload.sub || authPayload.user_id || '').trim();
+        if (!email && !userId && !guestSessionId) {
+          return jsonResponse({ ok: false, error: 'Customer account is missing valid credentials.' }, 400, origin);
         }
 
         if (request.method === 'GET') {
+          if (isGuestToken && guestSessionId) {
+            await ensureCrmTables(env);
+            const profile = await env.DB.prepare(
+              'SELECT * FROM customer_profiles WHERE guest_session_id = ? LIMIT 1'
+            ).bind(guestSessionId).first();
+            return jsonResponse({ ok: true, profile: profile ? { ...profile, is_guest: true } : null }, 200, origin);
+          }
           const profile = await loadCustomerProfileForAuth(env, authPayload);
           return jsonResponse({ ok: true, profile }, 200, origin);
         }
@@ -4983,10 +5309,25 @@ export default {
         }
 
         const phone = String(payload?.phone || '').trim();
+        const homeAddress = String(payload?.home_address || payload?.homeAddress || '').trim();
+        const workAddress = String(payload?.work_address || payload?.workAddress || '').trim();
         const fullName = String(payload?.full_name || payload?.fullName || '').trim() ||
-          customerNameFromAuthPayload(authPayload);
-        if (!phone && !fullName) {
+          (isGuestToken ? '' : customerNameFromAuthPayload(authPayload));
+        if (!phone && !fullName && !homeAddress && !workAddress) {
           return jsonResponse({ ok: false, error: 'Customer details are required.' }, 400, origin);
+        }
+
+        if (isGuestToken && guestSessionId) {
+          await ensureCrmTables(env);
+          await env.DB.prepare(
+            `INSERT OR REPLACE INTO customer_profiles 
+             (guest_session_id, is_guest, full_name, phone, status, created_at, updated_at)
+             VALUES (?, 1, ?, ?, 'active', ?, ?)`
+          ).bind(guestSessionId, fullName, phone, new Date().toISOString(), new Date().toISOString()).run();
+          const profile = await env.DB.prepare(
+            'SELECT * FROM customer_profiles WHERE guest_session_id = ? LIMIT 1'
+          ).bind(guestSessionId).first();
+          return jsonResponse({ ok: true, profile: profile ? { ...profile, is_guest: true } : null }, 200, origin);
         }
 
         await ensureCustomerProfile(env, {
@@ -4994,6 +5335,8 @@ export default {
           customer_email: email,
           customer_user_id: userId,
           contact_number: phone,
+          home_address: homeAddress,
+          work_address: workAddress,
           created_at: new Date().toISOString()
         });
 
@@ -5004,6 +5347,200 @@ export default {
           {
             ok: false,
             error: `Unable to save customer profile: ${error?.message || 'Unknown error'}`
+          },
+          500,
+          origin
+        );
+      }
+    }
+
+    if (url.pathname === '/api/guest/session') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      try {
+        const guestSessionId = UUID();
+        const accessToken = `guest_${guestSessionId}`;
+        return jsonResponse({ 
+          ok: true, 
+          access_token: accessToken, 
+          guest_session_id: guestSessionId,
+          session_type: 'guest'
+        }, 200, origin);
+      } catch (error) {
+        return jsonResponse(
+          { ok: false, error: `Unable to create guest session: ${error?.message || 'Unknown error'}` },
+          500,
+          origin
+        );
+      }
+    }
+
+    if (url.pathname === '/api/customer/send-phone-verification') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      const authHeader = request.headers.get('Authorization') || '';
+      const token = authHeader.startsWith('Bearer ')
+        ? authHeader.replace('Bearer ', '').trim()
+        : '';
+      if (!token) {
+        return jsonResponse({ ok: false, error: 'Missing access token' }, 401, origin);
+      }
+
+      try {
+        const authPayload = await verifySupabaseAccessToken(token);
+        if (!authPayload) {
+          return jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin);
+        }
+
+        let payload;
+        try {
+          payload = await request.json();
+        } catch (error) {
+          return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+        }
+
+        const phone = String(payload?.phone || '').trim();
+        if (!phone) {
+          return jsonResponse({ ok: false, error: 'Phone number is required.' }, 400, origin);
+        }
+// Check Twilio configuration
+if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_VERIFY_SERVICE_SID) {
+  return jsonResponse({ ok: false, error: 'Twilio is not configured.' }, 500, origin);
+}
+  // 40‑second cooldown per phone number
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS phone_verification_cooldown (phone TEXT PRIMARY KEY, last_sent INTEGER)').run();
+  const cooldownRecord = await env.DB.prepare('SELECT last_sent FROM phone_verification_cooldown WHERE phone = ?').bind(phone).first();
+  if (cooldownRecord && now - cooldownRecord.last_sent < 40) {
+    const wait = 40 - (now - cooldownRecord.last_sent);
+    return jsonResponse({ ok: false, error: `Please wait ${wait} seconds before requesting another code.` }, 429, origin);
+  }
+
+
+
+
+
+// Send verification via Twilio Verify
+const twilioPayload = new URLSearchParams({
+  To: phone,
+  Channel: 'sms'
+}).toString();
+
+const authHeader = 'Basic ' + btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
+
+const twilioResponse = await fetch(`https://verify.twilio.com/v2/Services/${env.TWILIO_VERIFY_SERVICE_SID}/Verifications`, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'Authorization': authHeader
+  },
+  body: twilioPayload
+});
+
+if (!twilioResponse.ok) {
+  const errText = await twilioResponse.text();
+  return jsonResponse({ ok: false, error: 'Failed to send verification code via Twilio.', rawResponse: errText }, 500, origin);
+} 
+await env.DB.prepare('INSERT INTO phone_verification_cooldown (phone, last_sent) VALUES (?, ?) ON CONFLICT(phone) DO UPDATE SET last_sent = ?').bind(phone, now, now).run();
+return jsonResponse({ ok: true, message: 'Verification code sent to your phone.' }, 200, origin);
+
+      } catch (error) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: `Unable to send phone verification code: ${error?.message || 'Unknown error'}`
+          },
+          500,
+          origin
+        );
+      }
+    }
+
+    if (url.pathname === '/api/customer/verify-phone') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      const authHeader = request.headers.get('Authorization') || '';
+      const token = authHeader.startsWith('Bearer ')
+        ? authHeader.replace('Bearer ', '').trim()
+        : '';
+      if (!token) {
+        return jsonResponse({ ok: false, error: 'Missing access token' }, 401, origin);
+      }
+
+      try {
+        const authPayload = await verifySupabaseAccessToken(token);
+        if (!authPayload) {
+          return jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin);
+        }
+
+        let payload;
+        const userId = String(authPayload.sub || authPayload.user_id || '').trim();
+        const email = String(authPayload.email || '').trim().toLowerCase();
+        try {
+          payload = await request.json();
+        } catch (error) {
+          return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+        }
+
+        const phone = String(payload?.phone || '').trim();
+        const code = String(payload?.code || '').trim();
+
+        if (!phone || !code) {
+          return jsonResponse({ ok: false, error: 'Phone and code are required.' }, 400, origin);
+        }
+
+        // Verify code via Twilio Verify
+        if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_VERIFY_SERVICE_SID) {
+          return jsonResponse({ ok: false, error: 'Twilio is not configured.' }, 500, origin);
+        }
+
+        const twilioPayload = new URLSearchParams({
+          To: phone,
+          Code: code
+        }).toString();
+
+        const authHeader = 'Basic ' + btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
+
+        const twilioResponse = await fetch(`https://verify.twilio.com/v2/Services/${env.TWILIO_VERIFY_SERVICE_SID}/VerificationCheck`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': authHeader
+          },
+          body: twilioPayload
+        });
+
+        if (!twilioResponse.ok) {
+          const errText = await twilioResponse.text();
+          return jsonResponse({ ok: false, error: 'Failed to verify code via Twilio.', rawResponse: errText }, 500, origin);
+        }
+
+        const verificationResult = await twilioResponse.json();
+        if (verificationResult.status !== 'approved') {
+          return jsonResponse({ ok: false, error: 'Invalid verification code.' }, 400, origin);
+        }
+
+        // Update customer profile to mark phone as verified
+        await ensureCustomerProfile(env, {
+          customer_email: email,
+          customer_user_id: userId,
+          contact_number: phone,
+          phone_verified: true,
+          created_at: new Date().toISOString()
+        });
+
+        return jsonResponse({ ok: true, message: 'Phone verified successfully.' }, 200, origin);
+      } catch (error) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: `Unable to verify phone: ${error?.message || 'Unknown error'}`
           },
           500,
           origin
@@ -5029,7 +5566,10 @@ export default {
       if (platform === 'ios' && !/^[a-f0-9]{64,}$/i.test(deviceToken)) {
         return jsonResponse({ ok: false, error: 'Invalid device token' }, 400, origin);
       }
-      if (platform === 'android' && deviceToken.length < 20) {
+      if (
+        platform === 'android' &&
+        (deviceToken.length < 20 || deviceToken.length > 4096 || /[\s<>"']/.test(deviceToken))
+      ) {
         return jsonResponse({ ok: false, error: 'Invalid FCM token' }, 400, origin);
       }
       if (platform !== 'ios' && platform !== 'android') {
@@ -6345,6 +6885,8 @@ export default {
             service_types: serviceTypes,
             default_service_type: defaultServiceType,
             featured_routes: featuredRoutes,
+            airport_terminal_options: pricing.airportTerminalOptions,
+            terminal_dropdown_required: pricing.terminalDropdownRequired,
             promo_codes: pricing.promoCodes,
             socal_service_area_enabled: pricing.socalServiceAreaEnabled,
             socal_cities: pricing.socalCities,
@@ -6382,6 +6924,8 @@ export default {
             service_types: pricing.serviceTypes,
             default_service_type: pricing.defaultServiceType,
             featured_routes: pricing.featuredRoutes,
+            airport_terminal_options: pricing.airportTerminalOptions,
+            terminal_dropdown_required: pricing.terminalDropdownRequired,
             promo_codes: pricing.promoCodes,
             socal_service_area_enabled: pricing.socalServiceAreaEnabled,
             socal_cities: pricing.socalCities,
@@ -6666,6 +7210,8 @@ export default {
             service_types: pricing.serviceTypes,
             default_service_type: pricing.defaultServiceType,
             featured_routes: pricing.featuredRoutes,
+            airport_terminal_options: pricing.airportTerminalOptions,
+            terminal_dropdown_required: pricing.terminalDropdownRequired,
             promo_codes: pricing.promoCodes,
             socal_service_area_enabled: pricing.socalServiceAreaEnabled,
             socal_cities: pricing.socalCities,
@@ -6861,6 +7407,8 @@ export default {
             service_types: serviceTypes,
             default_service_type: defaultServiceType,
             featured_routes: featuredRoutes,
+            airport_terminal_options: pricing.airportTerminalOptions,
+            terminal_dropdown_required: pricing.terminalDropdownRequired,
             promo_codes: pricing.promoCodes,
             socal_service_area_enabled: pricing.socalServiceAreaEnabled,
             socal_cities: pricing.socalCities
@@ -7188,6 +7736,8 @@ export default {
       kids,
       bags,
       contact_number,
+      airline,
+      terminal,
       promo_code,
       gratuity_percent,
       turnstile_token
@@ -7201,7 +7751,12 @@ export default {
       : '';
 
     let authenticatedCustomer = null;
-    if (accessToken) {
+    let guestSessionId = null;
+    const isGuestToken = accessToken.startsWith('guest_');
+    
+    if (isGuestToken) {
+      guestSessionId = accessToken.replace('guest_', '');
+    } else if (accessToken) {
       try {
         authenticatedCustomer = await verifySupabaseAccessToken(accessToken);
       } catch (error) {
@@ -7209,7 +7764,7 @@ export default {
       }
     }
 
-    if (!authenticatedCustomer && !isNativeAppClient) {
+    if (!authenticatedCustomer && !isGuestToken && !isNativeAppClient) {
       const turnstileVerification = await verifyTurnstileToken(
         env,
         turnstile_token,
@@ -7236,6 +7791,8 @@ export default {
     }
 
     const mode = booking_mode === 'hourly' ? 'hourly' : 'transfer';
+    const bookingAirline = String(airline || payload?.airline_name || '').trim().slice(0, 120);
+    const bookingTerminal = String(terminal || payload?.airport_terminal || '').trim().slice(0, 80);
     const pricing = await getPricingSettings(env);
     const normalizedServiceType = pricing.serviceTypes.includes(String(service_type || '').trim())
       ? String(service_type || '').trim()
@@ -7287,14 +7844,24 @@ export default {
     const appliedDiscount = automaticPromo.discountCents >= promo.discountCents ? automaticPromo : promo;
     const discountCents = appliedDiscount.discountCents;
     const discountedTotalCents = Math.max(0, totalCents - discountCents) + bookingAddOns.totalCents;
+    const discountedFareCents = Math.max(0, totalCents - discountCents);
     const gratuity = calculateGratuityCents({
-      subtotalCents: totalCents,
+      subtotalCents: discountedFareCents,
       gratuityPercent: gratuity_percent
     });
     const finalTotalCents = discountedTotalCents + gratuity.gratuityCents;
 
     const resolvedCustomerEmail = String(customer_email || authenticatedCustomer?.email || '').trim();
     const resolvedCustomerUserId = String(customer_user_id || authenticatedCustomer?.sub || authenticatedCustomer?.user_id || '').trim();
+    
+    // For guest bookings, email and phone are required
+    if (isGuestToken && !resolvedCustomerEmail) {
+      return jsonResponse({ ok: false, error: 'Email is required for guest bookings' }, 400, origin);
+    }
+    if (isGuestToken && !contact_number) {
+      return jsonResponse({ ok: false, error: 'Phone number is required for guest bookings' }, 400, origin);
+    }
+    
     const createdAt = new Date().toISOString();
 
     try {
@@ -7322,12 +7889,16 @@ export default {
           payment_url,
           customer_email,
           customer_user_id,
+          guest_session_id,
+          is_guest_booking,
           travelers,
           kids,
           bags,
           contact_number,
+          airline,
+          terminal,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           full_name,
@@ -7350,10 +7921,14 @@ export default {
           '',
           resolvedCustomerEmail,
           resolvedCustomerUserId,
+          guestSessionId || '',
+          isGuestToken ? 1 : 0,
           travelers || '',
           kids || '',
           bags || '',
           contact_number || '',
+          bookingAirline,
+          bookingTerminal,
           createdAt
         )
         .run();
@@ -7392,6 +7967,8 @@ export default {
         `Travelers: ${travelers || '—'}`,
         `Child seats: ${kids || '—'} (${formatCurrency(bookingAddOns.childSeatPriceCents)})`,
         `Luggage: ${bags || '—'} (${formatCurrency(bookingAddOns.luggagePriceCents)})`,
+        bookingAirline ? `Airline: ${bookingAirline}` : null,
+        bookingTerminal ? `Terminal: ${bookingTerminal}` : null,
         `Contact: ${contact_number || '—'}`
       ]
         .filter(Boolean)
@@ -7423,6 +8000,8 @@ export default {
             travelers: travelers || '',
             kids: kids || '',
             bags: bags || '',
+            airline: bookingAirline,
+            terminal: bookingTerminal,
             child_seat_price_cents: bookingAddOns.childSeatPriceCents,
             luggage_price_cents: bookingAddOns.luggagePriceCents,
             payment_status: paymentStatus,

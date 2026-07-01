@@ -6,6 +6,7 @@
   <title>Luxtravco | Customer Sign In</title>
   <link rel="icon" type="image/png" href="logo.png" />
   <link rel="stylesheet" href="styles.css" />
+  <script src="config.js"></script>
   <script src="supabase-client.js"></script>
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" defer></script>
   <style>
@@ -409,9 +410,14 @@
       </div>
 
       <form class="auth-form" id="auth-form">
+
         <label class="signup-only">
           Full Name
           <input type="text" name="full_name" placeholder="Jordan Lane" autocomplete="name" />
+        </label>
+        <label class="signup-only">
+          Phone Number
+          <input type="tel" name="phone" placeholder="+1 (909) 555-0198" autocomplete="tel" />
         </label>
         <label>
           Email
@@ -445,6 +451,23 @@
           Use a password you can keep secure. If you forget it later, use the reset flow below.
         </p>
       </form>
+
+      <section class="auth-shell hidden" id="phone-verify-panel">
+        <span class="eyebrow">Verify Your Phone</span>
+        <p class="auth-copy">
+          We've sent a verification code to your phone number. Enter it below to complete your account setup.
+        </p>
+        <form class="auth-form" id="phone-verify-form">
+          <label>
+            Verification Code
+            <input type="text" name="verification_code" placeholder="000000" autocomplete="off" maxlength="6" required />
+          </label>
+          <div class="auth-actions">
+            <button class="primary-btn" type="submit" id="phone-verify-submit">Verify Phone</button>
+            <button class="secondary-btn" type="button" id="phone-resend-code">Resend Code</button>
+          </div>
+        </form>
+      </section>
 
       <section class="auth-shell hidden" id="profile-panel">
         <span class="eyebrow">Customer Details</span>
@@ -543,8 +566,8 @@
             <strong>Request Review & Payment Policy</strong>
             <span>All reservation requests are subject to review and approval. Once a request has been approved, a secure payment link will be sent to the customer’s email address to confirm the booking.</span>
             <strong>Cancellation & Refund Policy</strong>
-            <span>If a customer cancels a reservation prior to the scheduled pickup time, more than 48 hours before pickup is eligible for a 100% refund; 24 to 48 hours before pickup is eligible for a 50% refund; less than 24 hours before pickup has no refund issued.</span>
-          </div>
+            <span>If a customer cancels a reservation prior to the scheduled pickup time, more than 48 hours before pickup is eligible for a 100% refund; 24 to 48 hours before pickup is eligible for a 50% refund; less than 24 hours before pickup has no refund issued.</span>            <strong>Waiting Time Policy</strong>
+            <span>Customers are granted a 10-minute complimentary waiting period from the scheduled pickup time. After the initial 10 minutes, a waiting fee of $0.50 per minute will be applied. Waiting charges will be added to the final reservation total and must be paid before the trip is completed.</span>          </div>
           <div class="auth-state" id="support-state">
             <strong>Support ready</strong>
             <span>Sign in first so we can connect the request to your account.</span>

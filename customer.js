@@ -28,9 +28,13 @@ const supportState = document.getElementById('support-state');
 const supportSubmit = document.getElementById('support-submit');
 const supportPolicyToggle = document.getElementById('support-policy-toggle');
 const supportPolicy = document.getElementById('support-policy');
-
+const phoneVerifyPanel = document.getElementById('phone-verify-panel');
+const phoneVerifyForm = document.getElementById('phone-verify-form');
+const phoneVerifySubmit = document.getElementById('phone-verify-submit');
+const phoneResendCode = document.getElementById('phone-resend-code');
 let mode = 'sign-in';
 let latestBookings = [];
+let pendingPhoneVerification = null; // { email, phone, access_token }
 
 let authTurnstile = null;
 
@@ -139,6 +143,8 @@ const updateButtonLabel = () => {
   authSubmit.textContent = mode === 'sign-in' ? 'Sign In' : 'Create Account';
   if (authForm) authForm.dataset.mode = mode;
 };
+
+// Verification is forced to SMS / Phone verification
 
 const formatAuthError = (error, fallback) => {
   const message = String(error?.message || fallback || 'Unable to complete authentication.');
@@ -339,6 +345,15 @@ const syncSession = async () => {
   if (!supabase) return;
   const { data } = await supabase.auth.getSession();
   const session = data?.session;
+  if (session && !session.user?.email) {
+    await supabase.auth.signOut();
+    setAuthState('Signed out', 'No customer session is active.');
+    setSupportState('Sign in required', 'Sign in first so we can connect the request to your account.');
+    profilePanel?.classList.add('hidden');
+    dashboardPanel?.classList.add('hidden');
+    renderSupportBookings([]);
+    return;
+  }
   if (session?.user?.email) {
     setAuthState('Signed in', `You are logged in as ${session.user.email}.`);
     setSupportState('Support ready', 'Choose a booking, add details, and send it to Luxtravco support.');
@@ -383,6 +398,8 @@ authForm.addEventListener('submit', async (event) => {
   const formData = new FormData(authForm);
   const email = String(formData.get('email') || '').trim();
   const password = String(formData.get('password') || '');
+  const phone = String(formData.get('phone') || '').trim();
+  const verificationMethod = 'phone';
 
   authSubmit.disabled = true;
   authSubmit.textContent = 'Working...';
@@ -391,25 +408,38 @@ authForm.addEventListener('submit', async (event) => {
     await verifyAuthTurnstile();
 
     if (mode === 'sign-up') {
-      const { error } = await supabase.auth.signUp({
+      if (!phone) {
+        throw new Error('Phone number is required for SMS verification.');
+      }
+      
+      const fullName = String(formData.get('full_name') || '').trim();
+
+      // Sign up with email and password first
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/customer.html?reset=1`,
-          data: {
-            full_name: String(formData.get('full_name') || '').trim()
-          }
+          data: { full_name: fullName }
         }
       });
-      if (error) throw error;
+      if (signUpError) throw signUpError;
+
+      // Update user account with phone number to trigger SMS verification OTP
+      const { error: updateError } = await supabase.auth.updateUser({
+        phone
+      });
+      if (updateError) throw updateError;
+
+      // After successful sign‑up, store pending phone verification info
+      pendingPhoneVerification = { phone };
+
+      // Hide auth form and show phone verification panel
+      authForm.classList.add('hidden');
+      phoneVerifyPanel?.classList.remove('hidden');
       setAuthState(
-        'Account created',
-        'Check your email if confirmation is required, then sign in.'
+        'Verify your phone',
+        'We sent a verification code to your phone number.'
       );
-      authTabs.forEach((item) => item.classList.remove('active'));
-      authTabs[0].classList.add('active');
-      mode = 'sign-in';
-      updateButtonLabel();
     } else {
       const { error } = await supabase.auth.signInWithPassword({
         email,
@@ -588,6 +618,64 @@ showResetPanelButton.addEventListener('click', async () => {
   resetPanel?.classList.remove('hidden');
 });
 
+const verifyPhoneCode = async (phone, code) => {
+  const supabase = await getSupabaseClient();
+  const { data, error } = await supabase.auth.verifyOtp({
+    phone,
+    token: code,
+    type: 'phone_change'
+  });
+  if (error) throw error;
+  return { ok: true, data };
+};
+
+phoneVerifyForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const code = String(new FormData(phoneVerifyForm).get('verification_code') || '').trim();
+  if (!code || code.length !== 6) {
+    setAuthState('Invalid code', 'Verification code must be 6 digits.');
+    return;
+  }
+  phoneVerifySubmit.disabled = true;
+  phoneVerifySubmit.textContent = 'Verifying...';
+  try {
+    await verifyPhoneCode(pendingPhoneVerification.phone, code);
+    setAuthState('Phone verified', 'Your account is ready to use. You can now book rides.');
+    phoneVerifyPanel?.classList.add('hidden');
+    authForm?.classList.remove('hidden');
+    pendingPhoneVerification = null;
+    phoneVerifyForm.reset();
+    await syncSession();
+  } catch (error) {
+    setAuthState('Verification error', error?.message || 'Unable to verify phone code.');
+  } finally {
+    phoneVerifySubmit.disabled = false;
+    phoneVerifySubmit.textContent = 'Verify Phone';
+  }
+});
+
+phoneResendCode?.addEventListener('click', async () => {
+  if (!pendingPhoneVerification) {
+    setAuthState('Session error', 'Your session expired. Please sign up again.');
+    return;
+  }
+  phoneResendCode.disabled = true;
+  phoneResendCode.textContent = 'Sending...';
+  try {
+    const supabase = await getSupabaseClient();
+    const { error } = await supabase.auth.updateUser({
+      phone: pendingPhoneVerification.phone
+    });
+    if (error) throw error;
+    setAuthState('Code sent', 'Check your phone for the verification code.');
+  } catch (error) {
+    setAuthState('Resend error', error?.message || 'Unable to resend verification code.');
+  } finally {
+    phoneResendCode.disabled = false;
+    phoneResendCode.textContent = 'Resend Code';
+  }
+});
+
 passwordForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const supabase = await getSupabaseClient();
@@ -611,9 +699,19 @@ passwordForm.addEventListener('submit', async (event) => {
   }
 });
 
+// Phone verification is required
+
 getSupabaseClient().then((supabase) => {
   if (supabase) {
-    supabase.auth.onAuthStateChange(() => {
+    supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session?.user) {
+        const meta = session.user.user_metadata || {};
+        if (!meta.phone_verified && !window.location.pathname.endsWith('verify-phone.html')) {
+          sessionStorage.setItem('postVerifyRedirect', window.location.pathname);
+          window.location.href = '/verify-phone.html';
+          return;
+        }
+      }
       syncSession();
     });
   }
