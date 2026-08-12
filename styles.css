@@ -327,7 +327,7 @@ main {
   border-radius: 0;
   min-height: 70vh;
   background-image: linear-gradient(120deg, rgba(6, 6, 6, 0.88), rgba(6, 6, 6, 0.55)),
-    url("suburban-main.jpg");
+    url("assets/black-suv.png");
   background-size: cover;
   background-position: center;
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
@@ -1421,12 +1421,94 @@ body.booking-hourly .hourly-only {
   display: none;
 }
 
+.airport-pickup-fieldset {
+  background: linear-gradient(180deg, rgba(240, 178, 71, 0.1), rgba(24, 24, 24, 0.72));
+}
+
+.airport-pickup-fieldset legend span {
+  color: var(--mist);
+}
+
+.airport-pickup-fieldset legend strong {
+  white-space: nowrap;
+}
+
+.airport-pickup-note {
+  margin: 0;
+  color: rgba(247, 245, 242, 0.58);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.airport-flight-info {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(240, 178, 71, 0.16);
+}
+
+.airport-flight-info[hidden] {
+  display: none;
+}
+
 .action-row {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   margin-top: 8px;
   min-width: 0;
+}
+
+/* ── Payment Method Badges ── */
+.payment-badges {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(240, 178, 71, 0.15);
+  flex-wrap: wrap;
+}
+
+.payment-badges__label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(247, 245, 242, 0.4);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.payment-badges__icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.pay-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  overflow: hidden;
+  opacity: 0.85;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  line-height: 0;
+  width: 28px;
+  height: 18px;
+}
+
+.pay-badge:hover {
+  opacity: 1;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.5);
+}
+
+img.pay-badge {
+  object-fit: contain;
+  background: transparent;
 }
 
 .map-panel {
@@ -1593,10 +1675,10 @@ body.booking-hourly .hourly-only {
 }
 
 .vehicle-option.active {
-  border-color: rgba(240, 178, 71, 0.78);
-  background: linear-gradient(135deg, rgba(240, 178, 71, 0.98), rgba(190, 128, 28, 0.96));
-  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.22);
-  color: #171006;
+  border-color: var(--gold);
+  background: #050505;
+  color: var(--gold);
+  box-shadow: 0 0 0 2px rgba(240, 178, 71, 0.6), 0 16px 32px rgba(0, 0, 0, 0.22);
 }
 
 .vehicle-option img {
@@ -1651,7 +1733,7 @@ body.booking-hourly .hourly-only {
 }
 
 .vehicle-option.active .vehicle-copy small {
-  color: rgba(36, 23, 8, 0.74);
+  color: rgba(240, 178, 71, 0.82);
 }
 
 @media (max-width: 800px) {

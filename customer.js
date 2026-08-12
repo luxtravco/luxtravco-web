@@ -248,7 +248,7 @@ const renderDashboard = (bookings) => {
             <strong>${total}</strong>
           </div>
           <div class="receipt-note">
-            Status: ${booking.payment_status || 'inquiry'}${booking.contact_number ? ` • Contact ${booking.contact_number}` : ''}
+            Status: ${booking.payment_status || 'inquiry'}${booking.contact_number ? ` • Contact ${booking.contact_number}` : ''}${[booking.flight_number, booking.airline, booking.flight_gate || booking.terminal, booking.flight_terminal].filter(Boolean).length ? ` • Flight: ${[booking.flight_number, booking.airline, booking.flight_gate || booking.terminal, booking.flight_terminal].filter(Boolean).join(' • ')}` : ''}
           </div>
         </div>
       `;

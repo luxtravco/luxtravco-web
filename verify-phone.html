@@ -21,9 +21,9 @@
     <h1>Verify your phone</h1>
     <p>Enter a phone number to receive a verification code.</p>
     <input type="tel" id="phone" placeholder="+1 555‑123‑4567" />
-    <label style="display:flex;align-items:center;margin-top:8px;">
-      <input type="checkbox" id="agreeSms" style="margin-right:8px;" />
-      I Agree for Luxtravco to send me SMS Messages for Booking Confirmations and OTP Request
+    <label style="display:flex;align-items:flex-start;margin-top:12px;font-size:0.85rem;line-height:1.4;color:#d8cdbb;cursor:pointer;">
+      <input type="checkbox" id="agreeSms" style="margin-right:8px;margin-top:3px;width:auto;" />
+      <span>By checking this box, you agree to the <a href="/sms-policy.html" target="_blank" style="color:#f0b247;text-decoration:underline;">Luxtravco SMS Policy</a> and consent to receive automated SMS messages for booking updates, chauffeur notifications, and verification codes. Consent is not a condition of purchase. Msg & data rates may apply. Reply STOP to opt-out.</span>
     </label>
     <button id="sendCode">Send code</button>
     <div id="codeSection" style="display:none; margin-top:1rem;">
@@ -39,6 +39,7 @@
     const codeSection = document.getElementById('codeSection');
     const verifyBtn = document.getElementById('verify');
     const codeInput = document.getElementById('code');
+    const agreeSms = document.getElementById('agreeSms');
     let pendingPhone = null;
     async function getSupabase(){
       const client = window.luxSupabaseReady ? await window.luxSupabaseReady : window.luxSupabase;
@@ -48,6 +49,7 @@
     sendBtn.addEventListener('click', async () => {
       const phone = phoneInput.value.trim();
       if (!phone) return alert('Enter a phone number');
+      if (!agreeSms.checked) return alert('You must agree to the SMS Policy to proceed.');
       try {
         await sendPhoneVerificationCode(phone);
         pendingPhone = phone;

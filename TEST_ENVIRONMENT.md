@@ -1,6 +1,6 @@
-# Luxtravco Test Environment
+# Luxtravco Booking Test Worker
 
-Use this environment for backend testing without touching production bookings or pricing data.
+Use the `luxtravco-booking-test` Worker for backend testing without touching production bookings or pricing data.
 
 ## URLs
 
@@ -16,10 +16,10 @@ Use this environment for backend testing without touching production bookings or
 
 ## Commands
 
-Deploy test Worker:
+Deploy the `luxtravco-booking-test` Worker (uses the `booking-test` wrangler config profile for its D1/KV bindings):
 
 ```bash
-npx wrangler deploy --env test
+npx wrangler deploy --env booking-test
 ```
 
 Deploy production Worker:

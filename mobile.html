@@ -4,7 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Luxtravco | Mobile</title>
-  <link rel="icon" type="image/png" href="logo.png" />
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
   <link rel="stylesheet" href="mobile.css" />
   <script src="supabase-client.js"></script>
   <script>
@@ -40,13 +41,13 @@
             <strong>App Store</strong>
           </span>
         </a>
-        <span class="store-badge">
+        <a class="store-badge" href="https://play.google.com/store/apps/details?id=com.luxtravco.app&hl=en_US" target="_blank" rel="noopener">
           <img class="store-icon-img" src="https://upload.wikimedia.org/wikipedia/commons/d/d0/Google_Play_Arrow_logo.svg" alt="" aria-hidden="true" />
           <span>
             <small>Get it on</small>
             <strong>Google Play</strong>
           </span>
-        </span>
+        </a>
       </div>
     </div>
   </header>
@@ -54,17 +55,17 @@
   <main>
     <section class="hero">
       <span class="eyebrow">Luxury Chauffeured Travel</span>
-      <h1>Black‑SUV chauffeured service for airport, corporate, and VIP travel.</h1>
+      <h1>Cadillac Escalade chauffeured service for airport, corporate, and VIP travel.</h1>
       <p>
-        Discreet, professional chauffeurs. Executive‑grade Suburban fleet. Reserve
+        Discreet, professional chauffeurs. Executive‑grade Escalade fleet. Reserve
         one-way or round-trip service in minutes.
       </p>
       <a class="primary-btn" href="#book">Reserve Service</a>
       <div class="hero-pills">
-        <span class="hero-pill">Black luxury sedan</span>
-        <span class="hero-pill">Worldwide transfers</span>
+        <span class="hero-pill">Cadillac Escalade</span>
+        <span class="hero-pill">Executive SUV service</span>
       </div>
-      <img src="suburban-main.jpg" alt="Black Suburban" />
+      <img src="assets/black-suv.png" alt="Black Cadillac Escalade" />
     </section>
 
     <section class="services">
@@ -243,6 +244,45 @@
               </div>
               <input type="number" min="0" max="2" value="0" data-seat-counter="booster" />
             </div>
+          </div>
+        </fieldset>
+        <fieldset class="addon-field airport-pickup-fieldset" data-airport-pickup-fieldset>
+          <legend>
+            <span data-airport-pickup-label>Meet &amp; Greet</span>
+            <strong data-airport-pickup-fee>$0.00</strong>
+          </legend>
+          <div class="child-seat-toggle airport-pickup-toggle">
+            <label>
+              <input type="radio" name="airportPickupMode" value="curbside" checked />
+              <span>No</span>
+            </label>
+            <label>
+              <input type="radio" name="airportPickupMode" value="meet_greet" />
+              <span>Yes</span>
+            </label>
+          </div>
+          <p class="airport-pickup-note">
+            Available for airport pickups and dropoffs when you want meet-and-greet service.
+          </p>
+          <div class="airport-flight-info" data-airport-flight-info hidden>
+            <label>
+              Flight Number
+              <input type="text" name="flightNumber" placeholder="AA 1234" />
+            </label>
+            <div class="field-row">
+              <label>
+                Airline
+                <input type="text" name="airline" placeholder="American Airlines" />
+              </label>
+              <label>
+                Gate
+                <input type="text" name="flightGate" placeholder="B12" />
+              </label>
+            </div>
+            <label>
+              Terminal
+              <input type="text" name="flightTerminal" placeholder="Terminal 4" />
+            </label>
           </div>
         </fieldset>
         <label>

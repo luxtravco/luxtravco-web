@@ -1,27 +1,72 @@
 name = "luxtravco-booking"
 main = "worker-index.js"
 compatibility_date = "2026-04-02"
+workers_dev = false
+preview_urls = false
+
+# ----------------------------------------------------------------------
+# Environment variables used by the Worker.
+# Do **not** commit real secret values – they should be added with `wrangler secret put <NAME>` after this file is updated.
+# ----------------------------------------------------------------------
+[vars]
+
 
 [[d1_databases]]
 binding = "DB"
 database_name = "luxtravco_bookings"
 database_id = "f4af986f-9d2e-4fd5-ad28-067973492a4c"
+[[kv_namespaces]]
+binding = "VEHICLE_IMAGES"
+id = "a220b4d8d14c4ef2a2407ce637f95456"
 
 [triggers]
 crons = ["*/15 * * * *"]
 
-[env.test]
+# Separate Cloudflare Worker (not production). Deploy with:
+#   wrangler deploy --name luxtravco-booking-test --config wrangler.toml --env booking-test
+[env.booking-test]
 name = "luxtravco-booking-test"
+workers_dev = true
 
-[env.test.vars]
-ENVIRONMENT = "test"
+[env.booking-test.vars]
+ENVIRONMENT = "booking-test"
 SITE_URL = "https://luxtravco.com"
+
 BOOKING_API_URL = "https://luxtravco-booking-test.luxtravco1.workers.dev"
 
-[[env.test.d1_databases]]
+[[env.booking-test.d1_databases]]
 binding = "DB"
-database_name = "luxtravco_bookings_test"
-database_id = "80370d21-3142-46fe-a806-86ed5be87829"
+database_name = "D1-test"
+database_id = "9e6c41c8-344b-455f-9ff5-1723c343e4af"
 
-[env.test.triggers]
+[env.booking-test.triggers]
 crons = []
+
+[[env.booking-test.kv_namespaces]]
+binding = "VEHICLE_IMAGES"
+id = "a220b4d8d14c4ef2a2407ce637f95456"
+
+[env.production]
+name = "luxtravco-booking"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+SITE_URL = "https://luxtravco.com"
+DUB_API_KEY = "dub_KgsgI3bNPbNGloXIRtVh0uRM"
+BOOKING_API_URL = "https://luxtravco-booking.luxtravco1.workers.dev"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "luxtravco_bookings"
+database_id = "f4af986f-9d2e-4fd5-ad28-067973492a4c"
+
+[[env.production.kv_namespaces]]
+  binding = "VEHICLE_IMAGES"
+  id = "a220b4d8d14c4ef2a2407ce637f95456"
+
+[[env.production.routes]]
+pattern = "admin.luxtravco.com/*"
+zone_name = "luxtravco.com"
+
+[env.production.triggers]
+crons = ["*/15 * * * *"]

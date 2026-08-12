@@ -508,6 +508,36 @@ h2 {
   display: none;
 }
 
+.airport-pickup-fieldset {
+  background: linear-gradient(180deg, rgba(240, 178, 71, 0.1), rgba(24, 24, 24, 0.72));
+}
+
+.airport-pickup-fieldset legend span {
+  color: var(--mist);
+}
+
+.airport-pickup-fieldset legend strong {
+  white-space: nowrap;
+}
+
+.airport-pickup-note {
+  margin: 0;
+  color: rgba(247, 245, 242, 0.58);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.airport-flight-info {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(240, 178, 71, 0.16);
+}
+
+.airport-flight-info[hidden] {
+  display: none;
+}
+
 .mode-toggle {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -622,10 +652,10 @@ body.booking-hourly .hourly-only {
 }
 
 .vehicle-option.active {
-  border-color: rgba(240, 178, 71, 0.78);
-  background: linear-gradient(135deg, rgba(240, 178, 71, 0.98), rgba(190, 128, 28, 0.96));
-  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.22);
-  color: #171006;
+  border-color: var(--gold);
+  background: #050505;
+  color: var(--gold);
+  box-shadow: 0 0 0 2px rgba(240, 178, 71, 0.6), 0 16px 32px rgba(0, 0, 0, 0.22);
 }
 
 .vehicle-option img {
@@ -660,7 +690,7 @@ body.booking-hourly .hourly-only {
 }
 
 .vehicle-option.active .vehicle-copy small {
-  color: rgba(36, 23, 8, 0.74);
+  color: rgba(240, 178, 71, 0.82);
 }
 
 .vehicle-price {

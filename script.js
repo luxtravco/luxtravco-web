@@ -47,6 +47,11 @@ let pricingState = {
   hourlyRate: HOURLY_RATE,
   mileageRateSuv: 4,
   mileageRateSedan: 3,
+  airportPickupEnabled: true,
+  airportPickupMeetGreetLabel: 'Meet & Greet',
+  airportPickupCurbsideLabel: 'Curbside Pickup',
+  airportPickupMeetGreetFeeCents: 3000,
+  airportPickupDefaultMode: 'curbside',
   serviceMileRates: {
     'Executive Black SUV': 4,
     'Black SUV': 4,
@@ -60,6 +65,10 @@ let pricingState = {
     { label: 'ONT → Palm Springs', price: 399, image_url: '' },
     { label: 'LAX → Palm Springs', price: 599, image_url: '' },
     { label: 'OC → Vegas', price: 1199, image_url: '' }
+  ],
+  vehicleOptions: [
+    { id: 'executive-black-suv', label: 'Executive Black SUV', subtitle: 'Luxury ride for 6 passengers', capacity: 6, image_url: '' },
+    { id: 'black-luxury-sedan', label: 'Black Luxury Sedan', subtitle: 'Luxury ride for 4 passengers', capacity: 4, image_url: '' }
   ],
   promoCodes: { ...PROMO_CODES }
 };
@@ -300,7 +309,7 @@ const applyPricingLabels = () => {
             <span class="price">${price}</span>
             ${imageMarkup}
             <ul>
-              <li>Chauffeured Suburban for the route</li>
+              <li>Chauffeured Cadillac Escalade for the route</li>
               <li>Professional presentation standard</li>
               <li>Flat rates managed from Luxtravco admin</li>
             </ul>
@@ -330,11 +339,59 @@ const applyPricingLabels = () => {
   if (mobileRoutes) {
     mobileRoutes.innerHTML = routeMarkup.map((route) => route.mobile).join('');
   }
+  renderDynamicVehicleOptions();
+};
+
+const renderDynamicVehicleOptions = () => {
+  const container = document.querySelector('.vehicle-choice');
+  if (!container || !pricingState.vehicleOptions || !pricingState.vehicleOptions.length) return;
+  const currentSelected = getSelectedServiceType() || pricingState.defaultServiceType;
+  const selectedValue = pricingState.vehicleOptions.some((o) => o.label === currentSelected)
+    ? currentSelected
+    : pricingState.vehicleOptions[0].label;
+
+  const hiddenInputMarkup = `<input type="hidden" name="serviceType" id="service-type-select" value="${selectedValue.replace(/"/g, '&quot;')}" />`;
+
+  const vehicleButtons = pricingState.vehicleOptions
+    .map((option) => {
+      const isSelected = option.label === selectedValue;
+        const rawUrl = String(option.image_url || option.imageUrl || '').trim();
+        const imageUrl = rawUrl;
+
+      const label = String(option.label || '').trim();
+      const subtitle = String(option.subtitle || `Luxury ride for ${option.capacity || 4} passengers`).trim();
+      const capacity = Number(option.capacity) || 4;
+
+      return `
+        <button class="vehicle-option${isSelected ? ' active' : ''}" type="button" data-service-type="${label.replace(/"/g, '&quot;')}">
+          <img src="${imageUrl.replace(/"/g, '&quot;')}" alt="${label.replace(/"/g, '&quot;')}" />
+          <span class="vehicle-copy">
+            <strong>${label} <span class="vehicle-capacity" aria-label="${capacity} passengers">${capacity} seats</span></strong>
+            <small>${subtitle}</small>
+          </span>
+          <span class="vehicle-price" data-vehicle-price="${label.replace(/"/g, '&quot;')}">Select route</span>
+        </button>
+      `;
+    })
+    .join('');
+
+  container.innerHTML = hiddenInputMarkup + vehicleButtons;
+
+  container.querySelectorAll('.vehicle-option').forEach((button) => {
+    button.addEventListener('click', () => {
+      container.querySelectorAll('.vehicle-option').forEach((b) => b.classList.remove('active'));
+      button.classList.add('active');
+      const selectedType = button.dataset.serviceType;
+      const input = container.querySelector('#service-type-select') || container.querySelector('input[name="serviceType"]');
+      if (input) input.value = selectedType;
+      scheduleEstimateUpdate();
+    });
+  });
 };
 
 const loadPricingSettings = async () => {
   try {
-    const response = await fetch(`${BOOKING_API_URL}/api/pricing`);
+    const response = await fetch(`${BOOKING_API_URL}/api/pricing`, { cache: 'no-store' });
     const data = await response.json();
     if (!response.ok || !data?.ok) return;
     const hourlyRate = Number.parseFloat(data?.pricing?.hourly_rate);
@@ -404,17 +461,62 @@ const loadPricingSettings = async () => {
         ? defaultServiceType
         : serviceTypes[0];
     }
+    if (typeof data?.pricing?.airport_pickup_enabled === 'boolean') {
+      pricingState.airportPickupEnabled = data.pricing.airport_pickup_enabled;
+    }
+    if (String(data?.pricing?.airport_pickup_meet_greet_label || '').trim()) {
+      pricingState.airportPickupMeetGreetLabel = String(data.pricing.airport_pickup_meet_greet_label).trim();
+    }
+    if (String(data?.pricing?.airport_pickup_curbside_label || '').trim()) {
+      pricingState.airportPickupCurbsideLabel = String(data.pricing.airport_pickup_curbside_label).trim();
+    }
+    const airportPickupFeeCents = Number.parseInt(data?.pricing?.airport_pickup_meet_greet_fee_cents, 10);
+    if (Number.isFinite(airportPickupFeeCents) && airportPickupFeeCents >= 0) {
+      pricingState.airportPickupMeetGreetFeeCents = airportPickupFeeCents;
+    }
+    if (String(data?.pricing?.airport_pickup_default_mode || '').trim()) {
+      pricingState.airportPickupDefaultMode =
+        String(data.pricing.airport_pickup_default_mode).trim().toLowerCase() === 'meet_greet'
+          ? 'meet_greet'
+          : 'curbside';
+    }
+    await loadVehicleOptions();
     if (featuredRoutes.length) {
       pricingState.featuredRoutes = featuredRoutes;
     }
     if (Object.keys(promoCodes).length) {
       pricingState.promoCodes = promoCodes;
     }
+    if (bookingForm) {
+      setAirportPickupMode(pricingState.airportPickupDefaultMode || 'curbside');
+      syncAirportPickupControls();
+    }
     applyPricingLabels();
     scheduleEstimateUpdate();
   } catch (error) {
     applyPricingLabels();
   }
+};
+
+const loadVehicleOptions = async () => {
+  try {
+    const resp = await fetch(`${BOOKING_API_URL}/api/vehicles`, { cache: 'no-store' });
+    const payload = await resp.json();
+    if (!resp.ok || !payload?.ok) return;
+    const vehicleOptions = Array.isArray(payload.vehicle_options)
+      ? payload.vehicle_options.map((opt) => ({
+          id: String(opt?.id || '').trim(),
+          label: String(opt?.label || '').trim(),
+          subtitle: String(opt?.subtitle || '').trim(),
+          capacity: Number(opt?.capacity) || 4,
+          mileage_rate: Number(opt?.mileage_rate) || 0,
+          image_url: String(opt?.image_url || opt?.imageUrl || '').trim(),
+        }))
+      : [];
+    if (vehicleOptions.length) {
+      pricingState.vehicleOptions = vehicleOptions;
+    }
+  } catch (_) {}
 };
 
 const refreshBookingAccess = async () => {
@@ -782,6 +884,34 @@ const normalizeLocationText = (value) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+const californiaAirports = [
+  { code: 'LAX', names: ['LOS ANGELES INTERNATIONAL AIRPORT'], address: '1 WORLD WAY', zip: '90045' },
+  { code: 'SNA', names: ['JOHN WAYNE AIRPORT', 'ORANGE COUNTY AIRPORT', 'SANTA ANA AIRPORT'], address: '18601 AIRPORT WAY', zip: '92707' },
+  { code: 'SAN', names: ['SAN DIEGO INTERNATIONAL AIRPORT', 'LINDBERGH FIELD'], address: '3225 N HARBOR DR', zip: '92101' },
+  { code: 'SJC', names: ['SAN JOSE INTERNATIONAL AIRPORT', 'MINETA SAN JOSE INTERNATIONAL'], address: '1701 AIRPORT BLVD', zip: '95110' },
+  { code: 'OAK', names: ['OAKLAND INTERNATIONAL AIRPORT'], address: '1 AIRPORT DR', zip: '94621' },
+  { code: 'BUR', names: ['HOLLYWOOD BURBANK AIRPORT', 'BOB HOPE AIRPORT'], address: '2627 N HOLLYWOOD WAY', zip: '91505' },
+  { code: 'ONT', names: ['ONTARIO INTERNATIONAL AIRPORT'], address: '2500 E AIRPORT DR', zip: '91761' },
+  { code: 'SMF', names: ['SACRAMENTO INTERNATIONAL AIRPORT'], address: '6900 AIRPORT BLVD', zip: '95837' },
+  { code: 'PSP', names: ['PALM SPRINGS INTERNATIONAL AIRPORT'], address: '3400 E TAHQUITZ CANYON WAY', zip: '92262' },
+  { code: 'LGB', names: ['LONG BEACH AIRPORT'], address: '4100 DONALD DOUGLAS DR', zip: '90808' },
+  { code: 'SBA', names: ['SANTA BARBARA AIRPORT'], address: '500 JAMES FOWLER RD', zip: '93117' },
+  { code: 'FAT', names: ['FRESNO YOSEMITE INTERNATIONAL AIRPORT'], address: '5175 E CLINTON WAY', zip: '93727' },
+  { code: 'MRY', names: ['MONTEREY REGIONAL AIRPORT'], address: '200 FRED KANE DR', zip: '93940' },
+  { code: 'STS', names: ['CHARLES M SCHULZ SONOMA COUNTY AIRPORT', 'SONOMA COUNTY AIRPORT'], address: '2200 AIRPORT BLVD', zip: '95403' },
+  { code: 'ACV', names: ['ARCATA EUREKA AIRPORT', 'CALIFORNIA REDWOOD COAST HUMBOLDT COUNTY AIRPORT'], address: '3561 BOEING AVE', zip: '95519' },
+  { code: 'CLD', names: ['MCCLELLAN PALOMAR AIRPORT', 'PALOMAR AIRPORT'], address: '2198 PALOMAR AIRPORT RD', zip: '92011' },
+  { code: 'RDD', names: ['REDDING MUNICIPAL AIRPORT'], address: '6751 WOODRUM CIR', zip: '96002' },
+  { code: 'SBP', names: ['SAN LUIS OBISPO AIRPORT'], address: '903 AIRPORT DR', zip: '93401' },
+  { code: 'IYK', names: ['INYOKERN AIRPORT'], address: '1669 AIRPORT RD', zip: '93527' },
+  { code: 'MMH', names: ['MAMMOTH YOSEMITE AIRPORT'], address: '1300 AIRPORT RD', zip: '93546' },
+  { code: 'BFL', names: ['MEADOWS FIELD AIRPORT', 'BAKERSFIELD AIRPORT'], address: '3701 WINGS WAY', zip: '93308' },
+  { code: 'CEC', names: ['DEL NORTE COUNTY AIRPORT', 'JACK MCNAMARA FIELD'], address: '150 DALE RUPERT RD', zip: '95531' },
+  { code: 'SCK', names: ['STOCKTON METROPOLITAN AIRPORT'], address: '5000 S AIRPORT WAY', zip: '95206' },
+  { code: 'MOD', names: ['MODESTO CITY COUNTY AIRPORT'], address: '617 AIRPORT WAY', zip: '95354' },
+  { code: 'SMX', names: ['SANTA MARIA PUBLIC AIRPORT'], address: '3249 TERMINAL DR', zip: '93455' }
+];
+
 const routeMatchAliases = (match) => {
   const normalized = normalizeLocationText(match);
   if (!normalized) return [];
@@ -795,6 +925,23 @@ const routeMatchAliases = (match) => {
     return ['DISNEYLAND', 'DISNEYLAND PARK', '1313 DISNEYLAND DR', '92802'];
   }
   return [normalized];
+};
+
+const isAirportAddress = (text) => {
+  const normalized = normalizeLocationText(text);
+  if (!normalized) return false;
+  return californiaAirports.some((airport) => {
+    if (normalized.includes(airport.code) && (normalized.includes('AIRPORT') || normalized.length <= airport.code.length + 5)) {
+      return true;
+    }
+    if (airport.names.some((name) => normalized.includes(normalizeLocationText(name)))) {
+      return true;
+    }
+    if (airport.address && normalized.includes(normalizeLocationText(airport.address))) {
+      return true;
+    }
+    return normalized.includes(airport.zip);
+  });
 };
 
 const destinationMatchesPromo = (promo, destinationText) => {
@@ -1104,6 +1251,85 @@ bookingForm = bookingButton?.closest('form');
 applyPricingLabels();
 loadPricingSettings();
 
+const getPickupLocationText = () =>
+  bookingForm?.querySelector('[name="pickupLocation"]')?.value || '';
+
+const getDropoffLocationText = () =>
+  bookingForm?.querySelector('[name="dropoffLocation"]')?.value || '';
+
+const getAirportPickupMode = () => {
+  const selected = String(
+    bookingForm?.querySelector('[name="airportPickupMode"]:checked')?.value ||
+    pricingState.airportPickupDefaultMode ||
+    'curbside'
+  ).trim().toLowerCase();
+  return selected === 'meet_greet' ? 'meet_greet' : 'curbside';
+};
+
+const setAirportPickupMode = (mode) => {
+  const nextMode = String(mode || '').trim().toLowerCase() === 'meet_greet' ? 'meet_greet' : 'curbside';
+  bookingForm?.querySelectorAll('[name="airportPickupMode"]').forEach((input) => {
+    input.checked = input.value === nextMode;
+  });
+  syncAirportPickupControls();
+  updateEstimateDisplay();
+};
+
+const getAirportPickupFeeCents = () =>
+  pricingState.airportPickupEnabled && getAirportPickupMode() === 'meet_greet'
+    ? Number(pricingState.airportPickupMeetGreetFeeCents) || 0
+    : 0;
+
+const shouldShowFlightInformation = () =>
+  pricingState.airportPickupEnabled &&
+  getAirportPickupMode() === 'meet_greet' &&
+  isAirportAddress(`${getPickupLocationText()} ${getDropoffLocationText()}`);
+
+const syncAirportPickupControls = () => {
+  if (!bookingForm) return;
+  const fieldset = bookingForm.querySelector('[data-airport-pickup-fieldset]');
+  const flightInfo = bookingForm.querySelector('[data-airport-flight-info]');
+  const pickupLabel = bookingForm.querySelector('[data-airport-pickup-label]');
+  const feeLabel = bookingForm.querySelector('[data-airport-pickup-fee]');
+  if (pickupLabel) {
+    pickupLabel.textContent = pricingState.airportPickupMeetGreetLabel || 'Meet & Greet';
+  }
+  if (feeLabel) {
+    const feeDollars = Number(pricingState.airportPickupMeetGreetFeeCents) / 100;
+    feeLabel.textContent = `+$${formatPriceValue(feeDollars)}`;
+  }
+  if (fieldset) {
+    fieldset.hidden = !pricingState.airportPickupEnabled;
+  }
+  if (flightInfo) {
+    flightInfo.hidden = !shouldShowFlightInformation();
+  }
+};
+
+const setupAirportPickupControls = () => {
+  if (!bookingForm) return;
+  const pickupInput = bookingForm.querySelector('[name="pickupLocation"]');
+  const dropoffInput = bookingForm.querySelector('[name="dropoffLocation"]');
+  const airportModeInputs = bookingForm.querySelectorAll('[name="airportPickupMode"]');
+  if (pickupInput) {
+    ['input', 'change', 'blur'].forEach((eventName) => {
+      pickupInput.addEventListener(eventName, () => syncAirportPickupControls());
+    });
+  }
+  if (dropoffInput) {
+    ['input', 'change', 'blur'].forEach((eventName) => {
+      dropoffInput.addEventListener(eventName, () => syncAirportPickupControls());
+    });
+  }
+  airportModeInputs.forEach((input) => {
+    input.addEventListener('change', () => {
+      syncAirportPickupControls();
+      updateEstimateDisplay();
+    });
+  });
+  syncAirportPickupControls();
+};
+
 const formatUSPhone = (value) => {
   const digits = value.replace(/\D/g, '');
   let cleaned = digits;
@@ -1362,7 +1588,7 @@ const handleBookingSubmit = async (event) => {
       })
     : null;
   const estimatedTotalCents = Number.isFinite(estimatedBaseTotal)
-    ? Math.round((estimatedBaseTotal + getAddOnsTotal()) * 100)
+    ? Math.round((estimatedBaseTotal + getAddOnsTotal() + getAirportPickupFeeCents() / 100) * 100)
     : null;
   const promoInput = bookingForm.querySelector('[name="promoCode"]');
   if (typedPromoCode && typedPromoCode !== appliedPromoCode) {
@@ -1402,9 +1628,22 @@ const handleBookingSubmit = async (event) => {
     contact_number: bookingForm
       .querySelector('[name="contactNumber"]')
       ?.value.trim() || '',
+    airport_pickup_mode: getAirportPickupMode(),
     promo_code: appliedPromoCode,
     gratuity_percent: getSelectedGratuityPercent(),
     route_pricing_mode: bookingMode === 'hourly' ? 'billable_legs' : 'continuous_route',
+    flight_number: shouldShowFlightInformation()
+      ? bookingForm.querySelector('[name="flightNumber"]')?.value.trim() || ''
+      : '',
+    airline: shouldShowFlightInformation()
+      ? bookingForm.querySelector('[name="airline"]')?.value.trim() || ''
+      : '',
+    flight_gate: shouldShowFlightInformation()
+      ? bookingForm.querySelector('[name="flightGate"]')?.value.trim() || ''
+      : '',
+    flight_terminal: shouldShowFlightInformation()
+      ? bookingForm.querySelector('[name="flightTerminal"]')?.value.trim() || ''
+      : '',
     stops: Array.from(bookingForm.querySelectorAll('.roundtrip-leg')).map((leg, index) => {
       const pickup = leg.querySelector(`[name="roundTripPickup${index}"]`);
       const dropoff = leg.querySelector(`[name="roundTripDropoff${index}"]`);
@@ -1468,7 +1707,9 @@ const handleBookingSubmit = async (event) => {
       throw new Error(data?.error || 'Request was not accepted');
     }
 
-    setStatus('Request submitted for review. If approved, payment will be emailed to you.');
+    const successMessage = 'Request submitted for review. You’ll get updates by email and SMS if approved.';
+    setStatus(successMessage);
+    alert(successMessage);
     bookingForm.reset();
     setBookingSubmissionState(true);
     return;
@@ -1540,15 +1781,18 @@ if (bookingForm) {
       bookingForm.querySelectorAll('[name="serviceType"]').forEach((field) => {
         field.value = pricingState.defaultServiceType;
       });
+      setAirportPickupMode(pricingState.airportPickupDefaultMode || 'curbside');
       syncServiceTypeField();
       document.body.classList.toggle('booking-hourly', bookingMode === 'hourly');
       bookingForm.querySelector('.gratuity-field')?.classList.remove('is-custom');
       syncPromoStatus();
       applyCustomerDetailsToBooking();
       scheduleEstimateUpdate();
+      syncAirportPickupControls();
       setBookingSubmissionState(Boolean(customerSession.email || customerSession.userId));
     }, 0);
   });
+  setupAirportPickupControls();
 }
 
 const toRad = (value) => (value * Math.PI) / 180;
@@ -1685,8 +1929,9 @@ async function updateEstimateDisplay() {
   const originalGratuityTotal = Math.round(baseTotal * gratuityPercent) / 100;
   const discountedGratuityTotal = Math.round(discountedBaseTotal * gratuityPercent) / 100;
   const addOnsTotal = getAddOnsTotal();
-  const originalTotal = baseTotal * 1.10 + originalGratuityTotal + addOnsTotal;
-  const estimatedTotal = discountedBaseTotal + discountedGratuityTotal + addOnsTotal;
+  const airportPickupFee = getAirportPickupFeeCents() / 100;
+  const originalTotal = baseTotal * 1.10 + originalGratuityTotal + addOnsTotal + airportPickupFee;
+  const estimatedTotal = discountedBaseTotal + discountedGratuityTotal + addOnsTotal + airportPickupFee;
   estimateHoursEl.textContent = formatEstimateHours(routeMetrics.hours);
   if (originalTotalEl) originalTotalEl.textContent = `$${originalTotal.toFixed(2)}`;
   estimateTotalEl.textContent = automaticPromo.discount > 0 && automaticPromo.discount >= promoDiscount

@@ -15,6 +15,19 @@ const jsonResponse = (data, status = 200, origin = '*') =>
     }
   });
 
+// JSON response without caching – used for endpoints that must always return fresh data.
+const jsonResponseNoCache = (data, status = 200, origin = '*') =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
+    }
+  });
+
 const unauthorized = () =>
   new Response('Unauthorized', {
     status: 401,
@@ -126,64 +139,148 @@ const normalizeSmsPhone = (value) => {
   return digits.startsWith('+') ? digits : `+${digits}`;
 };
 
-const handleInboundSms = async (env, request) => {
-  const formData = await request.formData();
-  const body = formData.get('Body')?.toString().toLowerCase().trim();
-  const fromRaw = formData.get('From')?.toString();
-  const from = normalizeSmsPhone(fromRaw);
+const twilioVerifyConfigured = (env) =>
+  Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_VERIFY_SERVICE_SID);
 
-  if (['stop', 'quit', 'unsubscribe', 'cancel'].includes(body)) {
-    await env.DB.prepare('UPDATE customer_profiles SET sms_opt_out = 1 WHERE phone = ?')
-      .bind(from)
-      .run();
-  } else if (['start', 'yes', 'resume', 'subscribe'].includes(body)) {
-    await env.DB.prepare('UPDATE customer_profiles SET sms_opt_out = 0 WHERE phone = ?')
-      .bind(from)
-      .run();
+const sendTwilioVerify = async (env, { to, channel }) => {
+  const destination = String(to || '').trim();
+  const normalizedChannel = String(channel || '').trim().toLowerCase();
+  if (!destination) {
+    return { ok: true, skipped: true, error: `${normalizedChannel || 'verify'} recipient is missing.` };
+  }
+  if (!twilioVerifyConfigured(env)) {
+    return { ok: true, skipped: true, error: 'Twilio Verify is not configured.' };
   }
 
-  // Respond with empty TwiML to acknowledge receipt
-  return new Response('<Response></Response>', { headers: { 'Content-Type': 'text/xml' } });
+  const auth = btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
+  try {
+    const verifyResponse = await fetch(
+      `https://verify.twilio.com/v2/Services/${env.TWILIO_VERIFY_SERVICE_SID}/Verifications`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${auth}`,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: new URLSearchParams({
+          To: destination,
+          Channel: normalizedChannel
+        }).toString()
+      }
+    );
+    const verifyData = await verifyResponse.json().catch(() => null);
+    if (!verifyResponse.ok || verifyData?.status !== 'pending') {
+      return {
+        ok: false,
+        error: verifyData?.message || `Failed to send Twilio Verify ${normalizedChannel} message.`
+      };
+    }
+    return { ok: true, sid: verifyData?.sid || '', channel: normalizedChannel };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error?.message || `Failed to send Twilio Verify ${normalizedChannel} message.`
+    };
+  }
+};
+
+const twilioMessagingConfigured = (env) =>
+  Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_FROM_NUMBER);
+
+const sendTwilioSms = async (env, { to, body }) => {
+  const phone = normalizeSmsPhone(to);
+  const trimmedBody = String(body || '').trim();
+  if (!phone) {
+    console.warn('[SMS] Skipped: recipient missing.');
+    return { ok: true, skipped: true, error: 'SMS recipient is missing.' };
+  }
+  if (!trimmedBody) {
+    console.warn('[SMS] Skipped: body missing.');
+    return { ok: true, skipped: true, error: 'SMS body is missing.' };
+  }
+  if (!twilioMessagingConfigured(env)) {
+    console.warn('[SMS] Skipped: Twilio not configured (missing ACCOUNT_SID, AUTH_TOKEN, or FROM_NUMBER).');
+    return { ok: true, skipped: true, error: 'Twilio SMS is not configured.' };
+  }
+
+  console.log(`[SMS] Sending to ${phone} from ${env.TWILIO_FROM_NUMBER}`);
+  const auth = btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
+  try {
+    const response = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${auth}`,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: new URLSearchParams({
+          To: phone,
+          From: env.TWILIO_FROM_NUMBER,
+          Body: trimmedBody
+        }).toString()
+      }
+    );
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      console.error(`[SMS] Twilio error ${response.status}:`, result?.message, result?.code);
+      return { ok: false, error: result?.message || 'Failed to send Twilio SMS.' };
+    }
+    console.log(`[SMS] Sent OK, SID: ${result?.sid}`);
+    return { ok: true, sid: result?.sid || '' };
+  } catch (error) {
+    console.error('[SMS] Fetch error:', error?.message);
+    return { ok: false, error: error?.message || 'Failed to send Twilio SMS.' };
+  }
 };
 
 const sendLuxSms = async (env, { to, body, booking, eventType = 'transactional' }) => {
-  // Check if the recipient has opted out of SMS
-  const normalizedPhone = normalizeSmsPhone(to);
-  const profile = await env.DB.prepare('SELECT sms_opt_out FROM customer_profiles WHERE phone = ?')
-    .bind(normalizedPhone)
-    .first();
-  if (profile?.sms_opt_out) {
-    return { ok: false, error: 'Customer has opted out of SMS.' };
-  }
-  
-  // Ensure Twilio is configured
-  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
-    return { ok: false, error: 'Twilio is not configured.' };
+  const phone = normalizeSmsPhone(to || booking?.contact_number || '');
+  if (!phone) {
+    return { ok: true, skipped: true, error: 'SMS recipient is missing.' };
   }
 
-  const payload = new URLSearchParams({
-    To: normalizeSmsPhone(to),
-    From: '+18444847433',
-    Body: body,
-  });
+  const trimmedBody = String(body || '').trim();
+  if (!trimmedBody) {
+    return { ok: true, skipped: true, error: 'SMS body is missing.' };
+  }
 
-  const authHeader = 'Basic ' + btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
+  if (twilioMessagingConfigured(env)) {
+    return sendTwilioSms(env, { to: phone, body: trimmedBody });
+  }
+
+  const cloudflareWorkerUrl = env.CLOUDFLARE_SMS_WORKER_URL || 'https://admin.luxtravco.com';
+
+  const idempotencyKey = [
+    booking?.id ? `booking-${booking.id}` : 'manual',
+    eventType,
+    phone.replace(/\D/g, '')
+  ].join(':');
+
   try {
-    const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`, {
+    const response = await fetch(cloudflareWorkerUrl, {
       method: 'POST',
       headers: {
-        Authorization: authHeader,
-        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
+        'Content-Type': 'application/json',
+        'X-Lux-Idempotency-Key': idempotencyKey,
+        'User-Agent': 'luxtravco-booking/1.0'
       },
-      body: payload,
+      body: JSON.stringify({
+        to: phone,
+        body: trimmedBody,
+        event_type: eventType,
+        booking_id: booking?.id || null,
+        idempotency_key: idempotencyKey
+      })
     });
+    const result = await response.json().catch(() => null);
     if (!response.ok) {
-      const errText = await response.text();
-      return { ok: false, error: 'Failed to send SMS via Twilio.', rawResponse: errText };
+      return { ok: false, error: result?.error || 'Failed to send SMS.' };
     }
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e?.message || 'Unexpected error sending SMS.' };
+    return { ok: true, result };
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Failed to send SMS.' };
   }
 };
 
@@ -282,40 +379,78 @@ const countChildSeatsFromSummary = (value) => {
   return genericMatches.reduce((sum, match) => sum + (Number.parseInt(match[1], 10) || 0), 0);
 };
 
+const normalizePreferredLanguage = (value) => {
+  const cleaned = String(value || '').trim();
+  if (!cleaned) return '';
+  const lower = cleaned.toLowerCase();
+  if (!['english', 'spanish', 'mandarin'].includes(lower)) return '';
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+};
+
 const calculateBookingAddOns = (booking = {}) => {
   const childSeatCount = countChildSeatsFromSummary(booking.kids);
+  const preferredLanguage = normalizePreferredLanguage(booking.preferred_language);
   const childSeatPriceCents =
     validCentsOrNull(booking.child_seat_price_cents) ?? childSeatCount * CHILD_SEAT_PRICE_CENTS;
   const luggagePriceCents = validCentsOrNull(booking.luggage_price_cents) ?? 0;
-  const totalCents = childSeatPriceCents + luggagePriceCents;
+  const airportPickupFeeCents = validCentsOrNull(booking.airport_pickup_fee_cents) ?? 0;
+  const preferredLanguageFeeCents = preferredLanguage ? 3000 : 0;
+  const totalCents = childSeatPriceCents + luggagePriceCents + airportPickupFeeCents + preferredLanguageFeeCents;
 
   return {
     childSeatCount,
     childSeatPriceCents,
     luggagePriceCents,
+    airportPickupFeeCents,
+    preferredLanguage,
+    preferredLanguageFeeCents,
     totalCents
   };
 };
 
 const bookingAddOnTextLines = (booking = {}) => {
   const addOns = calculateBookingAddOns(booking);
+  const isMeetAndGreet = String(booking.airport_pickup_mode || '').trim().toLowerCase() === 'meet_greet';
   return [
     `Child seats: ${booking.kids || '—'}`,
     `Child seat price: ${formatCurrency(addOns.childSeatPriceCents)}`,
     `Luggage: ${booking.bags || '—'}`,
+    `Meet-And-Greet: ${isMeetAndGreet ? 'Yes' : 'No'}`,
+    `Preferred Language Chauffeur: ${addOns.preferredLanguage || 'No Preference'}`,
     `Luggage price: ${formatCurrency(addOns.luggagePriceCents)}`,
+    `Meet-And-Greet fee: ${formatCurrency(addOns.airportPickupFeeCents)}`,
     `Add-ons total: ${formatCurrency(addOns.totalCents)}`
   ];
 };
 
 const bookingAddOnGridItems = (booking = {}) => {
   const addOns = calculateBookingAddOns(booking);
+  const isMeetAndGreet = String(booking.airport_pickup_mode || '').trim().toLowerCase() === 'meet_greet';
   return [
     ['Child seats', booking.kids || '—'],
     ['Child seat price', formatCurrency(addOns.childSeatPriceCents)],
     ['Luggage', booking.bags || '—'],
+    ['Meet-And-Greet', isMeetAndGreet ? 'Yes' : 'No'],
+    ['Preferred Language Chauffeur', addOns.preferredLanguage || 'No Preference'],
     ['Luggage price', formatCurrency(addOns.luggagePriceCents)],
+    ['Meet-And-Greet fee', formatCurrency(addOns.airportPickupFeeCents)],
     ['Add-ons total', formatCurrency(addOns.totalCents)]
+  ];
+};
+
+const bookingAddOnAdminTextLines = (booking = {}) => {
+  const addOns = calculateBookingAddOns(booking);
+  return [
+    ...bookingAddOnTextLines(booking),
+    `Preferred Language fee: ${formatCurrency(addOns.preferredLanguageFeeCents)}`
+  ];
+};
+
+const bookingAddOnAdminGridItems = (booking = {}) => {
+  const addOns = calculateBookingAddOns(booking);
+  return [
+    ...bookingAddOnGridItems(booking),
+    ['Preferred Language fee', formatCurrency(addOns.preferredLanguageFeeCents)]
   ];
 };
 
@@ -393,15 +528,15 @@ const bookingDetailsLines = (booking) => [
   Number(booking.gratuity_percent || 0) > 0
     ? `Driver gratuity: ${Number(booking.gratuity_percent || 0)}% (${formatCurrency(booking.gratuity_cents || 0)})`
     : null,
-  ...bookingAddOnTextLines(booking),
+  ...bookingAddOnAdminTextLines(booking),
   `Total paid: ${formatCurrency(booking.estimated_total_cents || 0)}`,
   `Travelers: ${booking.travelers || '—'}`,
   `Paid at: ${booking.paid_at || '—'}`,
   `Created at: ${booking.created_at || '—'}`
 ].filter(Boolean);
 
-const bookingDetailsHtmlRows = (booking) =>
-  bookingDetailsLines(booking)
+const bookingDetailsHtmlRows = (booking, lines = bookingDetailsLines(booking)) =>
+  lines
     .map((line) => {
       const [label, ...rest] = line.split(': ');
       return `
@@ -426,6 +561,43 @@ const sendBookingMadeAdminEmail = async (env, booking) => {
       body: `
         <table role="presentation" style="border-collapse:collapse;width:100%;border:1px solid #2b2419;border-radius:16px;overflow:hidden;background:#151311;">
           ${bookingDetailsHtmlRows(booking)}
+        </table>
+      `
+    })
+  });
+};
+
+const sendBookingSubmittedCustomerEmail = async (env, booking) => {
+  const to = String(booking?.customer_email || '').trim();
+  if (!to) {
+    return { ok: true, skipped: true, error: 'Customer email is missing.' };
+  }
+
+  const proposalLines = bookingDetailsLines(booking).map((line) =>
+    line.startsWith('Total paid:') ? line.replace('Total paid:', 'Proposal price:') : line
+  );
+  const proposalPrice = formatCurrency(booking.estimated_total_cents || 0);
+  return sendLuxEmail(env, {
+    to,
+    subject: `Luxtravco ride request received #${booking.id || ''}`,
+    text: [
+      `Hello ${booking.full_name || 'there'},`,
+      '',
+      `We have received your request for reservation #${booking.id || '—'}.`,
+      'We are reviewing your trip details and will send an update shortly.',
+      '',
+      ...proposalLines
+    ].join('\n'),
+    html: luxEmailShell({
+      eyebrow: 'REQUEST RECEIVED',
+      title: 'Ride request submitted',
+      intro: `We have received reservation #${booking.id || '—'} and are reviewing your trip details.`,
+      body: `
+        <p style="margin:0 0 12px;color:#f7f2e8;">Hello ${escapeHtml(booking.full_name || 'there')},</p>
+        <p style="margin:0 0 20px;color:#d8cdbb;">You will receive an update shortly.</p>
+        ${luxInfoGrid([['Proposal price', proposalPrice]])}
+        <table role="presentation" style="margin-top:18px;border-collapse:collapse;width:100%;border:1px solid #2b2419;border-radius:16px;overflow:hidden;background:#151311;">
+          ${bookingDetailsHtmlRows(booking, proposalLines.filter((line) => !line.startsWith('Proposal price:')))}
         </table>
       `
     })
@@ -460,8 +632,13 @@ const sendPaidBookingNotificationEmail = async (env, booking) => {
   });
 };
 
-const sendPaymentApprovedCustomerEmail = async (env, booking) => {
-  const to = String(booking.customer_email || '').trim();
+const sendPaymentApprovedCustomerEmail = async (env, booking, session = {}) => {
+  const to = String(
+    booking.customer_email ||
+      session?.customer_details?.email ||
+      session?.customer_email ||
+      ''
+  ).trim();
   if (!to) {
     return { ok: false, error: 'Customer email is missing.' };
   }
@@ -521,21 +698,107 @@ const markSmsSent = async (env, bookingId, column) => {
     .run();
 };
 
-const sendApprovalBookingSms = async (env, booking, checkoutUrl) => {
-  if (!checkoutUrl) return { ok: true, skipped: true };
-  return sendLuxSms(env, {
-    booking,
-    eventType: 'approval_payment_link',
-    body: `Luxtravco booking #${booking.id || ''} is approved for payment. Total ${formatCurrency(booking.estimated_total_cents || 0)}. Pay here: ${checkoutUrl}`
-  });
+const shortenUrl = async (env, longUrl) => {
+  const apiKey = env.DUB_API_KEY || 'dub_KgsgI3bNPbNGloXIRtVh0uRM';
+  try {
+    console.log('[Dub] Sending shorten request for:', longUrl);
+    const response = await fetch('https://api.dub.co/links', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({ url: longUrl, domain: 'pay.luxtravco.com' })
+    });
+    const data = await response.json();
+    console.log('[Dub] Response status:', response.status, 'body:', JSON.stringify(data));
+    // Handle duplicate link (409) – Dub may return existing short link in error payload
+    if (response.status === 409) {
+      const existing = data?.error?.link?.shortLink || data?.shortLink || data?.short_url;
+      if (existing) {
+        console.log('[Dub] Using existing shortLink from 409:', existing);
+        return existing;
+      }
+    }
+    if (!response.ok) {
+      console.warn('[Dub] Non-OK response, no short link available');
+      return '';
+    }
+    const shortLink = data?.shortLink || data?.short_url;
+    if (!shortLink) {
+      console.warn('[Dub] shortLink missing from successful response');
+      return '';
+    }
+    console.log('[Dub] Short link:', shortLink);
+    return shortLink;
+  } catch (e) {
+    console.error('[Dub] Exception shortening URL:', e?.message);
+    return '';
+  }
 };
 
-const sendPaidBookingSms = async (env, booking) => {
-  const total = formatCurrency(booking.estimated_total_cents || 0);
+const sendApprovalBookingSms = async (env, booking, checkoutUrl) => {
+  if (!checkoutUrl) {
+    console.warn(`[SMS] Approval SMS skipped for booking #${booking?.id}: no checkout URL.`);
+    return { ok: true, skipped: true };
+  }
+  console.log(`[SMS] Shortening URL for booking #${booking?.id}...`);
+  const smsUrl = await shortenUrl(env, checkoutUrl);
+  console.log(`[SMS] URL shortened: ${smsUrl}`);
+  const result = await sendLuxSms(env, {
+    booking,
+    eventType: 'approval_payment_link',
+    body: `Luxtravco: Payment required.\nYour reservation #${booking.id || ''} has been successfully approved.\n\nTotal due: ${formatCurrency(booking.estimated_total_cents || 0)}\nLink: ${smsUrl}\nPlease complete your secure payment to confirm your booking.\n\nThank you,\nLuxtravco`
+  });
+  console.log(`[SMS] Approval SMS result for booking #${booking?.id}:`, JSON.stringify(result));
+  if (result?.ok && !result?.skipped && booking?.id) {
+    await markSmsSent(env, booking.id, 'approval_sms_sent_at').catch((e) => {
+      console.warn('[SMS] markSmsSent failed:', e?.message);
+    });
+  }
+  return result;
+};
+
+const sendSubmittedBookingSms = async (env, booking) => {
+  const reservationRef = String(booking?.id || '').trim();
+  const reservationLine = reservationRef
+    ? `We have successfully received your request for reservation #${reservationRef}.`
+    : 'We have successfully received your ride request.';
+  const result = await sendLuxSms(env, {
+    booking,
+    eventType: 'submitted_confirmation',
+    body: `Luxtravco: Ride request submitted.\n\n${reservationLine}\nWe are currently reviewing your trip details to ensure premium service.\n\nYou will receive an update shortly.\n\nThank you,\nLuxtravco`
+  });
+  if (result?.ok && !result?.skipped && booking?.id) {
+    await markSmsSent(env, booking.id, 'submitted_sms_sent_at').catch((error) => {
+      console.warn('[SMS] submitted_sms_sent_at update failed:', error?.message);
+    });
+  }
+  return result;
+};
+
+const sendPaidBookingSms = async (env, booking, session = {}) => {
+  const reservationRef = String(
+    session?.client_reference_id ||
+      booking?.id ||
+      booking?.stripe_session_id ||
+      session?.id ||
+      ''
+  ).trim();
+  const paidCents = Number(
+    session?.amount_total ??
+      session?.amount_subtotal ??
+      booking.estimated_total_cents ??
+      0
+  );
+  const total = formatCurrency(paidCents);
+  const reservationLine = reservationRef
+    ? `Your payment for reservation #${reservationRef} has been securely received.`
+    : 'Your payment has been securely received.';
   return sendLuxSms(env, {
     booking,
     eventType: 'paid_confirmation',
-    body: `Luxtravco booking #${booking.id || ''} is confirmed. Total paid ${total}. Pickup: ${booking.pickup_date || '—'}${booking.pickup_time ? ` at ${booking.pickup_time}` : ''}. Reply STOP to unsubscribe. Reply START to resubscribe to this number.`
+    body: `Luxtravco: Payment successful.\n${reservationLine}\n\nTotal paid: ${total}.\n\nYour booking is complete, and we look forward to driving you.\n\nThank you,\nLuxtravco`
   });
 };
 
@@ -714,6 +977,16 @@ const approveBookingAndEmail = async (env, booking, ctx = null) => {
 
   if (ctx) {
     ctx.waitUntil(sendApprovalBookingSms(env, booking, checkout.url));
+  } else {
+    sendApprovalBookingSms(env, booking, checkout.url)
+      .then((result) => {
+        if (result?.ok === false && !result?.skipped) {
+          console.warn('Approved booking SMS failed:', result.error || result);
+        }
+      })
+      .catch((error) => {
+        console.warn('Approved booking SMS failed:', error?.message || error);
+      });
   }
 
   return { ok: true, checkoutUrl: checkout.url };
@@ -728,6 +1001,33 @@ const DEFAULT_ADMIN_EMAILS = 'info@luxtravco.com,emounier@icloud.com';
 const PAID_BOOKING_NOTIFY_EMAIL = 'emounier@icloud.com';
 const DEFAULT_SERVICE_TYPES = ['Executive Black SUV', 'Black Luxury Sedan'];
 const DEFAULT_SERVICE_TYPE = DEFAULT_SERVICE_TYPES[0];
+const DEFAULT_VEHICLE_OPTIONS = [
+  {
+    id: 'executive-black-suv',
+    label: 'Executive Black SUV',
+    icon: '',
+    subtitle: 'Luxury ride for 6 passengers',
+    capacity: 6,
+    mileage_rate: DEFAULT_SUV_MILE_RATE,
+    image_url: 'https://luxtravco.com/assets/black-suv.png'
+  },
+  {
+    id: 'black-luxury-sedan',
+    label: 'Black Luxury Sedan',
+    icon: '',
+    subtitle: 'Luxury ride for 4 passengers',
+    capacity: 4,
+    mileage_rate: DEFAULT_SEDAN_MILE_RATE,
+    image_url: 'https://luxtravco.com/assets/black-sedan.png'
+  }
+];
+const DEFAULT_AIRPORT_PICKUP_SETTINGS = {
+  enabled: true,
+  meetGreetLabel: 'Meet & Greet',
+  curbsideLabel: 'Curbside Pickup',
+  meetGreetFeeCents: 3000,
+  defaultMode: 'curbside'
+};
 const DEFAULT_SERVICE_MILE_RATES = {
   'Executive Black SUV': 4,
   'Black SUV': 4,
@@ -821,6 +1121,12 @@ const normalizeRouteImage = (value) => {
   if (/^data:image\/(?:png|jpe?g|webp);base64,[a-z0-9+/=]+$/i.test(image) && image.length <= 900000) {
     return image;
   }
+  if (/^https?:\/\/.+/i.test(image)) {
+    return image;
+  }
+  if (/^\/?assets\/.+/i.test(image)) {
+    return `https://luxtravco.com/${image.replace(/^\//, '')}`;
+  }
   return '';
 };
 const normalizeServiceTypes = (value) => {
@@ -836,6 +1142,77 @@ const normalizeServiceTypes = (value) => {
   }
   return unique.length ? unique : [...DEFAULT_SERVICE_TYPES];
 };
+const fallbackVehicleOption = (label, index = 0) => {
+  const clean = String(label || '').trim();
+  const lower = clean.toLowerCase();
+  const capacity = lower.includes('sedan') ? 4 : lower.includes('suv') || lower.includes('escalade') || lower.includes('suburban') || lower.includes('navigator') || lower.includes('range rover') ? 6 : 4;
+  const mileageRate = lower.includes('sedan') ? DEFAULT_SEDAN_MILE_RATE : DEFAULT_SUV_MILE_RATE;
+  const imageUrl = lower.includes('sedan')
+    ? 'https://luxtravco.com/assets/black-sedan.png'
+    : 'https://luxtravco.com/assets/black-suv.png';
+  return {
+    id: clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `vehicle-${index + 1}`,
+    label: clean,
+    icon: '',
+    subtitle: `Luxury ride for ${capacity} passengers`,
+    capacity,
+    mileage_rate: mileageRate,
+    image_url: imageUrl
+  };
+};
+const normalizeVehicleOptions = (value) => {
+  let entries = [];
+  if (Array.isArray(value)) {
+    entries = value;
+  } else {
+    const raw = String(value || '').trim();
+    if (!raw) return [...DEFAULT_VEHICLE_OPTIONS];
+    try {
+      const parsed = JSON.parse(raw);
+      entries = Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      entries = raw
+        .split(/\n/g)
+        .map((line) => {
+          const parts = String(line || '').split('|').map((part) => part.trim());
+          return {
+            label: parts[0] || '',
+            icon: parts[1] || '',
+            subtitle: parts[2] || '',
+            capacity: parts[3] || ''
+          };
+        });
+    }
+  }
+
+  const vehicles = [];
+  for (const [index, entry] of entries.entries()) {
+    const label = String(entry?.label || entry?.name || '').trim();
+    if (!label) continue;
+    const fallback = fallbackVehicleOption(label, index);
+    const icon = String(entry?.icon || entry?.symbol || fallback.icon).trim() || fallback.icon;
+    const subtitle = String(entry?.subtitle || entry?.description || '').trim() || fallback.subtitle;
+    const capacityValue = Number.parseInt(String(entry?.capacity || entry?.seats || fallback.capacity), 10);
+    const capacity = Number.isFinite(capacityValue) && capacityValue > 0 ? capacityValue : fallback.capacity;
+    const id = String(entry?.id || fallback.id).trim() || fallback.id;
+    const rawImageUrl = String(entry?.image_url || entry?.imageUrl || '').trim();
+    const imageUrl = normalizeRouteImage(rawImageUrl) || fallback.image_url;
+    const mileageRateValue = Number.parseFloat(entry?.mileage_rate || entry?.mileageRate || entry?.price_per_mile);
+    const mileageRate = Number.isFinite(mileageRateValue) && mileageRateValue > 0 ? mileageRateValue : fallback.mileage_rate;
+    if (!vehicles.some((vehicle) => vehicle.label.toLowerCase() === label.toLowerCase())) {
+      vehicles.push({ id, label, icon, subtitle, capacity, mileage_rate: mileageRate, image_url: imageUrl, disabled: !!entry?.disabled });
+    }
+  }
+
+  return vehicles.length ? vehicles : [...DEFAULT_VEHICLE_OPTIONS];
+};
+const normalizeAirportPickupSettings = (map) => ({
+  enabled: normalizeSettingBoolean(map.get('airport_pickup_enabled'), DEFAULT_AIRPORT_PICKUP_SETTINGS.enabled),
+  meetGreetLabel: String(map.get('airport_pickup_meet_greet_label') || DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetLabel).trim() || DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetLabel,
+  curbsideLabel: String(map.get('airport_pickup_curbside_label') || DEFAULT_AIRPORT_PICKUP_SETTINGS.curbsideLabel).trim() || DEFAULT_AIRPORT_PICKUP_SETTINGS.curbsideLabel,
+  meetGreetFeeCents: Math.max(0, Number.parseInt(map.get('airport_pickup_meet_greet_fee_cents') || `${DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetFeeCents}`, 10) || DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetFeeCents),
+  defaultMode: String(map.get('airport_pickup_default_mode') || DEFAULT_AIRPORT_PICKUP_SETTINGS.defaultMode).trim().toLowerCase() === 'meet_greet' ? 'meet_greet' : 'curbside'
+});
 const normalizePromoCities = (value) => {
   const entries = Array.isArray(value)
     ? value
@@ -861,6 +1238,47 @@ const normalizeSettingBoolean = (value, fallback = true) => {
   if (['1', 'true', 'yes', 'on', 'enabled'].includes(text)) return true;
   if (['0', 'false', 'no', 'off', 'disabled'].includes(text)) return false;
   return fallback;
+};
+const normalizeLookupText = (value) =>
+  String(value || '')
+    .toUpperCase()
+    .split('')
+    .map((character) => (character.match(/[A-Z0-9]/) ? character : ' '))
+    .join('')
+    .split(' ')
+    .filter(Boolean)
+    .join(' ');
+const airportMatchesText = (airport, text) => {
+  const normalized = normalizeLookupText(text);
+  if (!normalized) return false;
+  const code = normalizeLookupText(airport?.airport_code || '');
+  const name = normalizeLookupText(airport?.airport_name || '');
+  if (code && normalized.includes(code)) return true;
+  if (name && normalized.includes(name)) return true;
+  return Array.isArray(airport?.terminals) && airport.terminals.some((terminal) => normalized.includes(normalizeLookupText(terminal)));
+};
+const isAirportTrip = (pricing, pickupLocation, dropoffLocation, airline, terminal) => {
+  const text = [pickupLocation, dropoffLocation, airline, terminal].filter(Boolean).join(' ');
+  return (pricing.airportTerminalOptions || []).some((airport) => airportMatchesText(airport, text));
+};
+const parseJsonStringArray = (value, fallback = []) => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry || '').trim()).filter(Boolean);
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return [...fallback];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.map((entry) => String(entry || '').trim()).filter(Boolean);
+    }
+  } catch (error) {
+    // Fall through to the fallback parsing below.
+  }
+  return raw
+    .split(/[\n,]/g)
+    .map((entry) => String(entry || '').trim())
+    .filter(Boolean);
 };
 const normalizePromoCodes = (value) => {
   let entries = [];
@@ -1053,6 +1471,7 @@ const ensureBookingColumns = async (env) => {
       ['paid_at', 'TEXT'],
       ['paid_notification_sent_at', 'TEXT'],
       ['payment_receipt_sent_at', 'TEXT'],
+      ['submitted_sms_sent_at', 'TEXT'],
       ['approval_sms_sent_at', 'TEXT'],
       ['paid_sms_sent_at', 'TEXT'],
       ['reminder_sms_sent_at', 'TEXT'],
@@ -1074,17 +1493,77 @@ const ensureBookingColumns = async (env) => {
       ['travelers', 'TEXT'],
       ['kids', 'TEXT'],
       ['bags', 'TEXT'],
-      ['contact_number', 'TEXT']
+      ['contact_number', 'TEXT'],
+      ['driver_id', 'INTEGER'],
+      ['driver_name', 'TEXT'],
+      ['driver_photo_url', 'TEXT'],
+      ['airport_pickup_mode', 'TEXT'],
+      ['airport_pickup_fee_cents', 'INTEGER'],
+      ['preferred_language', 'TEXT'],
+      ['flight_number', 'TEXT'],
+      ['flight_gate', 'TEXT'],
+      ['flight_terminal', 'TEXT']
     ];
 
     for (const [name, type] of additions) {
       if (!columns.has(name)) {
-        await env.DB.prepare(`ALTER TABLE bookings ADD COLUMN ${name} ${type}`).run();
+        try {
+          await env.DB.prepare(`ALTER TABLE bookings ADD COLUMN ${name} ${type}`).run();
+        } catch (e) {
+          console.warn(`[DB Migration] Could not add column ${name}:`, e?.message || e);
+        }
+      }
+    }
+
+    const blankFillUpdates = [
+      'UPDATE bookings SET airline = COALESCE(airline, \'\') WHERE airline IS NULL',
+      'UPDATE bookings SET flight_number = COALESCE(flight_number, \'\') WHERE flight_number IS NULL',
+      'UPDATE bookings SET flight_gate = COALESCE(flight_gate, \'\') WHERE flight_gate IS NULL',
+      'UPDATE bookings SET flight_terminal = COALESCE(flight_terminal, \'\') WHERE flight_terminal IS NULL',
+      'UPDATE bookings SET airport_pickup_mode = COALESCE(airport_pickup_mode, \'\') WHERE airport_pickup_mode IS NULL',
+      'UPDATE bookings SET airport_pickup_fee_cents = COALESCE(airport_pickup_fee_cents, 0) WHERE airport_pickup_fee_cents IS NULL',
+      'UPDATE bookings SET preferred_language = COALESCE(preferred_language, \'\') WHERE preferred_language IS NULL'
+    ];
+    for (const statement of blankFillUpdates) {
+      try {
+        await env.DB.prepare(statement).run();
+      } catch (e) {
+        console.warn('[DB Migration] Could not backfill booking field:', e?.message || e);
       }
     }
   })();
 
   return bookingColumnsReady;
+};
+
+
+let driversTableReady;
+const ensureDriversTable = async (env) => {
+  if (driversTableReady) return driversTableReady;
+
+  driversTableReady = (async () => {
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS drivers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        first_name TEXT NOT NULL,
+        last_name TEXT NOT NULL,
+        email TEXT,
+        photo_url TEXT,
+        language TEXT,
+        music TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`
+    ).run();
+    // Migrate: add disabled column if missing
+    try {
+      await env.DB.prepare('ALTER TABLE drivers ADD COLUMN disabled INTEGER DEFAULT 0').run();
+    } catch (error) {
+      // Column already exists — ignore
+    }
+  })();
+
+  return driversTableReady;
 };
 
 
@@ -1159,6 +1638,43 @@ const ensureSupportTables = async (env) => {
   return supportTablesReady;
 };
 
+let driverRegistrationTablesReady;
+const ensureDriverRegistrationTables = async (env) => {
+  if (driverRegistrationTablesReady) return driverRegistrationTablesReady;
+
+  driverRegistrationTablesReady = (async () => {
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS driver_registration_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        first_name TEXT NOT NULL,
+        last_name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        password TEXT NOT NULL,
+        car_model TEXT NOT NULL,
+        profile_photo_url TEXT,
+        car_images_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'pending',
+        review_notes TEXT DEFAULT '',
+        reviewed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`
+    ).run();
+
+    const { results } = await env.DB.prepare('PRAGMA table_info(driver_registration_requests)').all();
+    const columns = new Set((results || []).map((row) => row.name));
+    if (!columns.has('profile_photo_url')) {
+      await env.DB.prepare('ALTER TABLE driver_registration_requests ADD COLUMN profile_photo_url TEXT').run();
+    }
+
+    await env.DB.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_driver_registration_requests_status ON driver_registration_requests(status, created_at DESC)'
+    ).run();
+  })();
+
+  return driverRegistrationTablesReady;
+};
+
 let crmColumnsReady;
 let adminPushTablesReady;
 let cachedApnsBearerToken;
@@ -1181,7 +1697,6 @@ const ensureCrmTables = async (env) => {
         work_address TEXT DEFAULT '',
         tags TEXT DEFAULT '',
         notes TEXT DEFAULT '',
-        sms_opt_out INTEGER DEFAULT 0,
         status TEXT DEFAULT 'active',
         last_booking_at TEXT,
         created_at TEXT NOT NULL,
@@ -1249,9 +1764,14 @@ const ensurePricingSettings = async (env) => {
       ['mileage_rate_suv', String(DEFAULT_SUV_MILE_RATE)],
       ['mileage_rate_sedan', String(DEFAULT_SEDAN_MILE_RATE)],
       ['admin_emails', String(env.ADMIN_EMAILS || DEFAULT_ADMIN_EMAILS)],
-      ['driver_emails', String(env.DRIVER_EMAILS || '')],
       ['service_types', JSON.stringify(DEFAULT_SERVICE_TYPES)],
+      ['vehicle_options', JSON.stringify(DEFAULT_VEHICLE_OPTIONS)],
       ['default_service_type', DEFAULT_SERVICE_TYPE],
+      ['airport_pickup_enabled', String(DEFAULT_AIRPORT_PICKUP_SETTINGS.enabled)],
+      ['airport_pickup_meet_greet_label', DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetLabel],
+      ['airport_pickup_curbside_label', DEFAULT_AIRPORT_PICKUP_SETTINGS.curbsideLabel],
+      ['airport_pickup_meet_greet_fee_cents', String(DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetFeeCents)],
+      ['airport_pickup_default_mode', DEFAULT_AIRPORT_PICKUP_SETTINGS.defaultMode],
       ['socal_service_area_enabled', 'true'],
       ['socal_cities', DEFAULT_SOCAL_CITIES.join('\n')],
       ['promo_codes', JSON.stringify(DEFAULT_PROMO_CODES)],
@@ -1965,6 +2485,17 @@ const getPricingSettings = async (env) => {
       }
     })()
   );
+  const vehicleOptions = normalizeVehicleOptions(
+    (() => {
+      const raw = map.get('vehicle_options');
+      if (!raw) return DEFAULT_VEHICLE_OPTIONS;
+      try {
+        return JSON.parse(raw);
+      } catch (error) {
+        return raw;
+      }
+    })()
+  );
   const defaultServiceType = String(map.get('default_service_type') || serviceTypes[0] || DEFAULT_SERVICE_TYPE).trim();
   const storedRouteCount = Number.parseInt(map.get('route_count') || `${DEFAULT_FEATURED_ROUTES.length}`, 10);
   const routeCount = Number.isFinite(storedRouteCount) && storedRouteCount > 0
@@ -1989,32 +2520,36 @@ const getPricingSettings = async (env) => {
   const adminEmails = normalizeAdminEmails(
     map.get('admin_emails') || env.ADMIN_EMAILS || DEFAULT_ADMIN_EMAILS
   );
-  const driverEmails = normalizeAdminEmails(
-    map.get('driver_emails') || env.DRIVER_EMAILS || ''
-  );
   const promoCodes = normalizePromoCodes(map.get('promo_codes') || JSON.stringify(DEFAULT_PROMO_CODES));
   const socalCities = normalizeSoCalCities(map.get('socal_cities') || DEFAULT_SOCAL_CITIES.join('\n'));
   const socalServiceAreaEnabled = normalizeSettingBoolean(map.get('socal_service_area_enabled'), true);
+  const airportPickup = normalizeAirportPickupSettings(map);
   return {
     hourlyRate: Number.isFinite(hourlyRate) && hourlyRate > 0 ? hourlyRate : DEFAULT_HOURLY_RATE,
     mileageRateSuv: Number.isFinite(mileageRateSuv) && mileageRateSuv > 0 ? mileageRateSuv : DEFAULT_SUV_MILE_RATE,
     mileageRateSedan: Number.isFinite(mileageRateSedan) && mileageRateSedan > 0 ? mileageRateSedan : DEFAULT_SEDAN_MILE_RATE,
-    serviceMileRates: serviceTypes.reduce((rates, serviceType) => {
-      rates[serviceType] = serviceType.toLowerCase().includes('sedan')
-        ? (Number.isFinite(mileageRateSedan) && mileageRateSedan > 0 ? mileageRateSedan : DEFAULT_SEDAN_MILE_RATE)
-        : (Number.isFinite(mileageRateSuv) && mileageRateSuv > 0 ? mileageRateSuv : DEFAULT_SUV_MILE_RATE);
+    serviceMileRates: vehicleOptions.reduce((rates, option) => {
+      const rate = Number(option.mileage_rate);
+      rates[option.label] = Number.isFinite(rate) && rate > 0
+        ? rate
+        : (option.label.toLowerCase().includes('sedan') ? mileageRateSedan : mileageRateSuv);
       return rates;
     }, {}),
     serviceTypes,
+    vehicleOptions,
     defaultServiceType: serviceTypes.includes(defaultServiceType) ? defaultServiceType : serviceTypes[0],
     featuredRoutes,
     airportTerminalOptions: DEFAULT_AIRPORT_TERMINAL_OPTIONS,
     terminalDropdownRequired: true,
+    airportPickupEnabled: airportPickup.enabled,
+    airportPickupMeetGreetLabel: airportPickup.meetGreetLabel,
+    airportPickupCurbsideLabel: airportPickup.curbsideLabel,
+    airportPickupMeetGreetFeeCents: airportPickup.meetGreetFeeCents,
+    airportPickupDefaultMode: airportPickup.defaultMode,
     socalServiceAreaEnabled,
     socalCities,
     promoCodes,
-    adminEmails,
-    driverEmails
+    adminEmails
   };
 };
 
@@ -3826,6 +4361,8 @@ const renderCrmPage = (bookings, profiles) => {
           body: JSON.stringify(payload)
         });
         const data = await response.json();
+    // Load driver profile after pricing
+    await loadDriverProfile();
         if (!response.ok || !data.ok) {
           throw new Error(data?.error || 'Unable to save profile.');
         }
@@ -3885,16 +4422,6 @@ const getAllowedAdminEmails = async (env) => {
     ...normalizeAdminEmails(env.ADMIN_EMAILS || ''),
     ...normalizeAdminEmails(pricing.adminEmails || []),
     ...tableEmails
-  ]);
-};
-
-const getAllowedDriverEmails = async (env) => {
-  const pricing = await getPricingSettings(env);
-  const adminsCanDrive = normalizeAdminEmails(env.ADMIN_EMAILS || DEFAULT_ADMIN_EMAILS);
-  return new Set([
-    ...normalizeAdminEmails(env.DRIVER_EMAILS || ''),
-    ...normalizeAdminEmails(pricing.driverEmails || []),
-    ...adminsCanDrive
   ]);
 };
 
@@ -4066,11 +4593,18 @@ const finalizePaidBooking = async (env, booking, session = {}, ctx = null) => {
     paid_at: paidBooking?.paid_at || paidAt,
     customer_email: paidBooking?.customer_email || booking.customer_email || sessionCustomerEmail
   };
+  const paymentSession = {
+    ...session,
+    customer_details: {
+      ...(session?.customer_details || {}),
+      email: sessionCustomerEmail || session?.customer_details?.email || ''
+    }
+  };
 
   await scheduleBookingReminders(env, emailBooking);
 
   if (!paidBooking?.payment_receipt_sent_at) {
-    const receipt = await sendPaymentReceivedCustomerEmail(env, emailBooking);
+    const receipt = await sendPaymentReceivedCustomerEmail(env, emailBooking, paymentSession);
     if (!receipt.ok) {
       return { ok: false, error: receipt.error || 'Customer payment receipt email failed' };
     }
@@ -4081,6 +4615,16 @@ const finalizePaidBooking = async (env, booking, session = {}, ctx = null) => {
     )
       .bind(new Date().toISOString(), booking.id)
       .run();
+  }
+
+  if (!paidBooking?.paid_sms_sent_at) {
+    const paidSms = await sendPaidBookingSms(env, emailBooking, paymentSession);
+    if (!paidSms.ok) {
+      return { ok: false, error: paidSms.error || 'Customer payment confirmation SMS failed' };
+    }
+    await markSmsSent(env, booking.id, 'paid_sms_sent_at').catch((e) => {
+      console.warn('[SMS] paid_sms_sent_at update failed:', e?.message);
+    });
   }
 
   if (ctx) {
@@ -4251,8 +4795,12 @@ const serializeAdminBooking = (booking) => ({
   travelers: booking.travelers || '',
   kids: booking.kids || '',
   bags: booking.bags || '',
+  preferred_language: booking.preferred_language || '',
   airline: booking.airline || '',
   terminal: booking.terminal || '',
+  driver_id: booking.driver_id ? Number(booking.driver_id) : null,
+  driver_name: booking.driver_name || booking.assigned_driver_name || '',
+  driver_photo_url: booking.driver_photo_url || booking.assigned_driver_photo || '',
   contact_number: booking.contact_number || '',
   customer_email: booking.customer_email || '',
   created_at: booking.created_at || ''
@@ -4272,6 +4820,9 @@ const serializeDriverTrip = (booking) => ({
   luggage: booking.bags || '',
   airline: booking.airline || '',
   terminal: booking.terminal || '',
+  driverId: booking.driver_id ? Number(booking.driver_id) : null,
+  driverName: booking.driver_name || booking.assigned_driver_name || '',
+  driverPhotoUrl: booking.driver_photo_url || booking.assigned_driver_photo || '',
   note: parseStopsText(booking.stops || '') || (booking.booking_mode === 'hourly' ? 'Hourly booking' : 'Transfer booking')
 });
 
@@ -4311,6 +4862,183 @@ const serializeSupportCase = (row) => ({
   updated_at: row.updated_at || '',
   resolved_at: row.resolved_at || ''
 });
+
+const serializeDriverRegistrationRequest = (row) => ({
+  id: Number(row.id || 0),
+  first_name: row.first_name || '',
+  last_name: row.last_name || '',
+  email: row.email || '',
+  password: row.password || '',
+  car_model: row.car_model || '',
+  profile_photo_url: row.profile_photo_url || parseJsonStringArray(row.car_images_json || '[]')[0] || '',
+  car_images: parseJsonStringArray(row.car_images_json || '[]'),
+  status: row.status || 'pending',
+  review_notes: row.review_notes || '',
+  reviewed_at: row.reviewed_at || '',
+  created_at: row.created_at || '',
+  updated_at: row.updated_at || ''
+});
+
+const getDriverProfilePhotoUrl = (requestRow) =>
+  String(requestRow?.profile_photo_url || '').trim() ||
+  parseJsonStringArray(requestRow?.car_images_json || '[]').find(Boolean) ||
+  '';
+
+const upsertDriverFromRegistrationRequest = async (env, requestRow) => {
+  await ensureDriversTable(env);
+  const firstName = String(requestRow?.first_name || '').trim();
+  const lastName = String(requestRow?.last_name || '').trim();
+  const email = String(requestRow?.email || '').trim().toLowerCase();
+  if (!firstName || !lastName || !email) return;
+
+  const now = new Date().toISOString();
+  const photoUrl = getDriverProfilePhotoUrl(requestRow);
+  const existing = await env.DB.prepare('SELECT id, photo_url FROM drivers WHERE LOWER(email) = ? LIMIT 1')
+    .bind(email)
+    .first();
+
+  if (existing?.id) {
+    const finalPhoto = existing.photo_url || photoUrl || null;
+    await env.DB.prepare(
+      `UPDATE drivers
+       SET first_name = ?,
+           last_name = ?,
+           photo_url = ?,
+           updated_at = ?
+       WHERE id = ?`
+    )
+      .bind(firstName, lastName, finalPhoto, now, existing.id)
+      .run();
+    return;
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO drivers (
+      first_name,
+      last_name,
+      email,
+      photo_url,
+      language,
+      music,
+      created_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(firstName, lastName, email, photoUrl || null, null, null, now, now)
+    .run();
+};
+
+const loadDriverRecordByEmail = async (env, email) => {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!cleanEmail) return null;
+  await ensureDriversTable(env);
+  return env.DB.prepare(
+    'SELECT id, first_name, last_name, email, photo_url, language, music FROM drivers WHERE LOWER(email) = ? LIMIT 1'
+  ).bind(cleanEmail).first();
+};
+
+const upsertSupabaseDriverAuthUser = async (env, requestRow) => {
+  const serviceRoleKey = String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const email = String(requestRow?.email || '').trim().toLowerCase();
+  const password = String(requestRow?.password || '').trim();
+  const firstName = String(requestRow?.first_name || '').trim();
+  const lastName = String(requestRow?.last_name || '').trim();
+
+  if (!serviceRoleKey) {
+    return { ok: false, skipped: true, error: 'Missing Supabase service role key.' };
+  }
+  if (!email || !password) {
+    return { ok: false, skipped: true, error: 'Missing driver email or password.' };
+  }
+
+  const headers = {
+    apikey: serviceRoleKey,
+    Authorization: `Bearer ${serviceRoleKey}`,
+    'Content-Type': 'application/json'
+  };
+  const userMetadata = {
+    role: 'driver',
+    first_name: firstName,
+    last_name: lastName
+  };
+
+  const findUserByEmail = async () => {
+    for (let page = 1; page <= 10; page += 1) {
+      const response = await fetch(`${SUPABASE_URL}/auth/v1/admin/users?page=${page}&per_page=100`, {
+        headers
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const data = await response.json().catch(() => null);
+      const users = Array.isArray(data?.users) ? data.users : [];
+      const match = users.find((user) => String(user?.email || '').trim().toLowerCase() === email);
+      if (match) return match;
+      if (users.length < 100) break;
+    }
+    return null;
+  };
+
+  const existingUser = await findUserByEmail();
+  if (existingUser?.id) {
+    const deleteResponse = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(existingUser.id)}`, {
+      method: 'DELETE',
+      headers
+    });
+    if (!deleteResponse.ok) {
+      const errorPayload = await deleteResponse.json().catch(() => null);
+      return {
+        ok: false,
+        error: errorPayload?.msg || errorPayload?.error || 'Unable to clear existing Supabase driver user.'
+      };
+    }
+  }
+
+  const createResponse = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: userMetadata
+    })
+  });
+  if (!createResponse.ok) {
+    const errorPayload = await createResponse.json().catch(() => null);
+    return {
+      ok: false,
+      error: errorPayload?.msg || errorPayload?.error || 'Unable to create Supabase driver user.'
+    };
+  }
+
+  const created = await createResponse.json().catch(() => null);
+  return { ok: true, action: existingUser?.id ? 'remade' : 'created', user_id: created?.user?.id || created?.id || null };
+};
+
+const syncApprovedSupabaseDriverUsers = async (env, requests = []) => {
+  const approvedRequests = (Array.isArray(requests) ? requests : [])
+    .filter((request) => String(request?.status || '').toLowerCase() === 'approved');
+
+  for (const requestRow of approvedRequests) {
+    await upsertSupabaseDriverAuthUser(env, requestRow);
+  }
+};
+
+const syncApprovedDrivers = async (env) => {
+  await ensureDriverRegistrationTables(env);
+  await ensureDriversTable(env);
+
+  const { results: approvedRequests } = await env.DB.prepare(
+    "SELECT * FROM driver_registration_requests WHERE LOWER(status) = 'approved' ORDER BY created_at DESC, id DESC"
+  ).all();
+
+  for (const requestRow of approvedRequests || []) {
+    await upsertDriverFromRegistrationRequest(env, requestRow);
+  }
+
+  await syncApprovedSupabaseDriverUsers(env, approvedRequests || []);
+};
 
 const requireAdminApiAuth = async (request, env, origin) => {
   const authHeader = request.headers.get('Authorization') || '';
@@ -4357,8 +5085,7 @@ const requireDriverApiAuth = async (request, env, origin) => {
       return { response: jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin) };
     }
     const email = String(payload.email || '').trim().toLowerCase();
-    const allowed = await getAllowedDriverEmails(env);
-    if (!email || !allowed.has(email)) {
+    if (!email) {
       return { response: jsonResponse({ ok: false, error: 'Driver access denied' }, 403, origin) };
     }
     return { payload, email };
@@ -4454,7 +5181,6 @@ const renderServiceAreaPage = (pricing = {}) => {
 
 const renderAdminPage = (rows, pricing = {}) => {
   const adminEmailsValue = Array.isArray(pricing.adminEmails) ? pricing.adminEmails.join(', ') : DEFAULT_ADMIN_EMAILS;
-  const driverEmailsValue = Array.isArray(pricing.driverEmails) ? pricing.driverEmails.join(', ') : '';
   const hourlyRate = Number.isFinite(Number(pricing.hourlyRate))
     ? Number(pricing.hourlyRate)
     : DEFAULT_HOURLY_RATE;
@@ -4464,14 +5190,51 @@ const renderAdminPage = (rows, pricing = {}) => {
   const mileageRateSedan = Number.isFinite(Number(pricing.mileageRateSedan))
     ? Number(pricing.mileageRateSedan)
     : DEFAULT_SEDAN_MILE_RATE;
-  const serviceTypes = normalizeServiceTypes(pricing.serviceTypes);
-  const defaultServiceType = serviceTypes.includes(pricing.defaultServiceType)
+  const vehicleOptions = normalizeVehicleOptions(pricing.vehicleOptions || pricing.serviceTypes || '');
+  const defaultServiceType = vehicleOptions.some((option) => option.label === pricing.defaultServiceType)
     ? pricing.defaultServiceType
-    : serviceTypes[0];
+    : (vehicleOptions[0]?.label || DEFAULT_SERVICE_TYPE);
+  const airportPickupEnabled = pricing.airportPickupEnabled !== false;
+  const airportPickupMeetGreetLabel = String(pricing.airportPickupMeetGreetLabel || DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetLabel).trim() || DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetLabel;
+  const airportPickupCurbsideLabel = String(pricing.airportPickupCurbsideLabel || DEFAULT_AIRPORT_PICKUP_SETTINGS.curbsideLabel).trim() || DEFAULT_AIRPORT_PICKUP_SETTINGS.curbsideLabel;
+  const airportPickupMeetGreetFeeCents = Number.isFinite(Number(pricing.airportPickupMeetGreetFeeCents))
+    ? Number(pricing.airportPickupMeetGreetFeeCents)
+    : DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetFeeCents;
+  const airportPickupDefaultMode = pricing.airportPickupDefaultMode === 'meet_greet' ? 'meet_greet' : DEFAULT_AIRPORT_PICKUP_SETTINGS.defaultMode;
   const featuredRoutes =
     Array.isArray(pricing.featuredRoutes) && pricing.featuredRoutes.length
       ? pricing.featuredRoutes
       : DEFAULT_FEATURED_ROUTES;
+  const vehicleCards = vehicleOptions
+    .map(
+      (option, index) => `
+        <div class="pricing-card" data-vehicle-card data-vehicle-id="${escapeHtml(option.id || `vehicle_${index + 1}`)}">
+          <strong>Vehicle ${index + 1}${option.label ? `: ${escapeHtml(option.label)}` : ''}</strong>
+          <span>Editable image, label, subtitle, capacity, and per-mile cost for the customer app.</span>
+          <div class="pricing-card-order">
+            <button class="mini-action" type="button" data-move-vehicle="up">Move Up</button>
+            <button class="mini-action" type="button" data-move-vehicle="down">Move Down</button>
+          </div>
+          <input type="text" data-vehicle-label value="${escapeHtml(option.label)}" placeholder="Vehicle name" />
+          <input type="text" data-vehicle-subtitle value="${escapeHtml(option.subtitle)}" placeholder="Subtitle" />
+          <input type="number" min="1" step="1" data-vehicle-capacity value="${escapeHtml(option.capacity)}" placeholder="Seats" />
+          <input type="number" min="0.01" step="0.01" data-vehicle-mileage-rate value="${escapeHtml(option.mileage_rate || (option.label.toLowerCase().includes('sedan') ? mileageRateSedan : mileageRateSuv))}" placeholder="Mileage rate ($/mi)" />
+          <label style="margin-left:8px; font-size:0.9em;">
+             <input type="checkbox" data-vehicle-disabled ${option.disabled ? 'checked' : ''} /> Disabled
+           </label>
+          <input type="hidden" data-vehicle-image-value value="${escapeHtml(option.image_url || '')}" />
+          <input type="file" data-vehicle-image-file accept="image/png,image/jpeg,image/webp" />
+          ${
+            option.image_url
+              ? `<img class="route-image-preview" src="${escapeHtml(option.image_url)}" alt="${escapeHtml(option.label)} vehicle preview" />`
+              : ''
+          }
+          <button class="mini-action" type="button" data-clear-vehicle-image>Clear Image</button>
+          <button class="mini-action" type="button" data-clear-vehicle>Remove Vehicle</button>
+        </div>
+      `
+    )
+    .join('');
   const pricingCards = featuredRoutes
     .map(
       (route, index) => `
@@ -4496,10 +5259,10 @@ const renderAdminPage = (rows, pricing = {}) => {
       `
     )
     .join('');
-  const serviceTypeOptions = serviceTypes
+  const serviceTypeOptions = vehicleOptions
     .map(
-      (serviceType) =>
-        `<option value="${escapeHtml(serviceType)}" ${serviceType === defaultServiceType ? 'selected' : ''}>${escapeHtml(serviceType)}</option>`
+      (vehicleOption) =>
+        `<option value="${escapeHtml(vehicleOption.label)}" ${vehicleOption.label === defaultServiceType ? 'selected' : ''}>${escapeHtml(vehicleOption.label)}</option>`
     )
     .join('');
   const tableRows = rows
@@ -4546,6 +5309,9 @@ const renderAdminPage = (rows, pricing = {}) => {
           <td>${escapeHtml(row.travelers || '')}</td>
           <td>${escapeHtml(row.kids || '')}</td>
           <td>${escapeHtml(row.bags || '')}</td>
+          <td>${escapeHtml(row.preferred_language || '—')}</td>
+          <td>${escapeHtml(String(row.airport_pickup_mode || '').trim().toLowerCase() === 'meet_greet' ? 'Yes' : 'No')}</td>
+          <td>${escapeHtml([row.flight_number, row.airline, row.flight_gate || row.terminal, row.flight_terminal].filter(Boolean).join(' • ') || '—')}</td>
           <td>${escapeHtml(row.contact_number || '')}</td>
           <td>${escapeHtml(row.created_at)}</td>
           <td>
@@ -4616,6 +5382,7 @@ const renderAdminPage = (rows, pricing = {}) => {
       <a class="danger" href="/admin/support" style="text-decoration:none; display:inline-flex; align-items:center;">Support</a>
       <a class="danger" href="/admin/promos" style="text-decoration:none; display:inline-flex; align-items:center;">Promo Codes</a>
       <a class="danger" href="/admin/service-area" style="text-decoration:none; display:inline-flex; align-items:center;">Service Area</a>
+      <a class="danger" href="/admin/driver-registration-requests" style="text-decoration:none; display:inline-flex; align-items:center;">Driver Requests</a>
       <button class="danger" id="notify-update" type="button">Notify App Update</button>
       <button class="danger" id="clear-bookings" type="button">Clear Bookings</button>
       <span class="warning" id="admin-action-status">Warning: clear permanently deletes all bookings.</span>
@@ -4628,14 +5395,21 @@ const renderAdminPage = (rows, pricing = {}) => {
       <input type="hidden" name="route_count" value="${escapeHtml(featuredRoutes.length)}" />
       <div class="pricing-grid">
         <div class="pricing-card">
-          <strong>Vehicle Options</strong>
-          <span>One value per line. The default option appears first in the booking forms.</span>
-          <textarea name="service_types" rows="4" style="width:100%; padding:11px 12px; border-radius:10px; border:1px solid rgba(240,178,71,0.24); background:rgba(0,0,0,0.42); color:#f7f5f2; font-size:0.95rem; resize:vertical;">${escapeHtml(serviceTypes.join('\n'))}</textarea>
-        </div>
-        <div class="pricing-card">
           <strong>Default Vehicle</strong>
           <span>Used when a customer has not chosen a vehicle yet.</span>
           <select name="default_service_type">${serviceTypeOptions}</select>
+        </div>
+        <div class="pricing-card">
+          <strong>Airport Pickup</strong>
+          <span>Show Meet &amp; Greet and Curbside Pickup for airport bookings. The meet &amp; greet fee is editable.</span>
+          <label class="checkbox-row"><input type="checkbox" name="airport_pickup_enabled" ${airportPickupEnabled ? 'checked' : ''} /> Enable airport pickup selector</label>
+          <input type="text" name="airport_pickup_meet_greet_label" value="${escapeHtml(airportPickupMeetGreetLabel)}" placeholder="Meet & Greet label" />
+          <input type="text" name="airport_pickup_curbside_label" value="${escapeHtml(airportPickupCurbsideLabel)}" placeholder="Curbside Pickup label" />
+          <input type="number" min="0" step="0.01" name="airport_pickup_meet_greet_fee_cents" value="${escapeHtml((airportPickupMeetGreetFeeCents / 100).toFixed(2))}" placeholder="30.00" />
+          <select name="airport_pickup_default_mode">
+            <option value="curbside"${airportPickupDefaultMode === 'curbside' ? ' selected' : ''}>Curbside</option>
+            <option value="meet_greet"${airportPickupDefaultMode === 'meet_greet' ? ' selected' : ''}>Meet &amp; Greet</option>
+          </select>
         </div>
         <div class="pricing-card">
           <strong>Hourly Rate</strong>
@@ -4652,9 +5426,11 @@ const renderAdminPage = (rows, pricing = {}) => {
           <span>Per-mile charge for sedan routes.</span>
           <input type="number" min="0.01" step="0.01" name="mileage_rate_sedan" value="${escapeHtml(mileageRateSedan)}" />
         </div>
+        ${vehicleCards}
         ${pricingCards}
       </div>
       <div class="pricing-panel-actions">
+        <button class="danger" id="add-vehicle" type="button">Add Vehicle</button>
         <button class="danger" id="add-route" type="button">Add Route</button>
         <button class="danger" type="submit">Save Pricing</button>
         <span class="warning" id="pricing-status">Current flat rates are editable here.</span>
@@ -4675,21 +5451,6 @@ const renderAdminPage = (rows, pricing = {}) => {
       <button class="danger" type="submit">Save Admin Emails</button>
       <span class="warning" id="admin-emails-status">Current admin email allowlist is editable here.</span>
     </form>
-    <form class="pricing-panel" id="driver-accounts-form">
-      <div class="pricing-header">
-        <h2>Driver Accounts</h2>
-        <span class="subtle">These emails can sign in to the driver app only. Create the user in Supabase Auth first.</span>
-      </div>
-      <div class="pricing-grid">
-        <div class="pricing-card" style="grid-column: 1 / -1;">
-          <strong>Driver Emails</strong>
-          <span>Separate addresses with commas or new lines.</span>
-          <textarea name="driver_emails" rows="4" style="width:100%; padding:11px 12px; border-radius:10px; border:1px solid rgba(240,178,71,0.24); background:rgba(0,0,0,0.42); color:#f7f5f2; font-size:0.95rem; resize:vertical;">${escapeHtml(driverEmailsValue)}</textarea>
-        </div>
-      </div>
-      <button class="danger" type="submit">Save Driver Accounts</button>
-      <span class="warning" id="driver-accounts-status">Current driver allowlist is editable here.</span>
-    </form>
     <table>
       <thead>
         <tr>
@@ -4708,13 +5469,16 @@ const renderAdminPage = (rows, pricing = {}) => {
           <th>Travelers</th>
           <th>Child seats</th>
           <th>Luggage</th>
+          <th>Preferred Language</th>
+          <th>Meet-And-Greet</th>
+          <th>Flight Details</th>
           <th>Contact</th>
           <th>Created</th>
           <th>Actions</th>
         </tr>
       </thead>
       <tbody>
-        ${tableRows || '<tr><td colspan="18">No bookings yet.</td></tr>'}
+        ${tableRows || '<tr><td colspan="20">No bookings yet.</td></tr>'}
       </tbody>
     </table>
   </main>
@@ -4760,6 +5524,22 @@ const renderAdminPage = (rows, pricing = {}) => {
     const pricingForm = document.getElementById('pricing-form');
     const pricingStatus = document.getElementById('pricing-status');
     const addRouteButton = document.getElementById('add-route');
+    const renumberVehicleCards = () => {
+      const cards = Array.from(pricingForm ? pricingForm.querySelectorAll('[data-vehicle-card]') : []);
+      cards.forEach((card, index) => {
+        const title = card.querySelector('strong');
+        const labelInput = card.querySelector('[data-vehicle-label]');
+        const label = labelInput ? labelInput.value.trim() : '';
+        if (title) title.textContent = 'Vehicle ' + (index + 1) + (label ? ': ' + label : '');
+      });
+    };
+    if (pricingForm) {
+      pricingForm.addEventListener('input', (event) => {
+        if (event.target.matches('[data-vehicle-label]')) {
+          renumberVehicleCards();
+        }
+      });
+    }
     const renumberRouteCards = () => {
       const cards = Array.from(document.querySelectorAll('[data-route-card]'));
       cards.forEach((card, index) => {
@@ -4820,38 +5600,29 @@ const renderAdminPage = (rows, pricing = {}) => {
       }
       renumberRouteCards();
     });
+    // Upload vehicle image to KV and get public URL
     const routeImageToDataUrl = (file) => new Promise((resolve, reject) => {
-      if (!file) {
-        resolve('');
-        return;
-      }
-      if (!/^image\\/(png|jpe?g|webp)$/i.test(file.type || '')) {
-        reject(new Error('Use a PNG, JPG, or WebP image.'));
-        return;
-      }
-      if (file.size > 4_000_000) {
-        reject(new Error('Use an image under 4 MB.'));
-        return;
-      }
       const reader = new FileReader();
-      reader.onload = () => {
-        const img = new Image();
-        img.onload = () => {
-          const maxSide = 1400;
-          const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.max(1, Math.round(img.width * scale));
-          canvas.height = Math.max(1, Math.round(img.height * scale));
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', 0.74));
-        };
-        img.onerror = () => reject(new Error('Unable to read image.'));
-        img.src = String(reader.result || '');
-      };
-      reader.onerror = () => reject(new Error('Unable to read image.'));
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('Failed to read image'));
       reader.readAsDataURL(file);
     });
+
+    const uploadVehicleImage = async (file, label) => {
+      if (!file) return '';
+      const form = new FormData();
+      form.append('file', file);
+      form.append('label', label);
+      const response = await fetch('/api/vehicles/upload-image', {
+        method: 'POST',
+        body: form,
+      });
+      const result = await response.json();
+      if (!result.ok) {
+        throw new Error(result.error || 'Image upload failed');
+      }
+      return result.url;
+    };
     if (pricingForm) {
       pricingForm.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -4860,11 +5631,39 @@ const renderAdminPage = (rows, pricing = {}) => {
         payload.hourly_rate = pricingForm.querySelector('input[name="hourly_rate"]')?.value || '';
         payload.mileage_rate_suv = pricingForm.querySelector('input[name="mileage_rate_suv"]')?.value || '';
         payload.mileage_rate_sedan = pricingForm.querySelector('input[name="mileage_rate_sedan"]')?.value || '';
-        payload.service_types = pricingForm.querySelector('textarea[name="service_types"]')?.value || '';
+        const vehicleCards = Array.from(pricingForm.querySelectorAll('[data-vehicle-card]'));
+        payload.service_types = vehicleCards.map((card) => card.querySelector('[data-vehicle-label]')?.value || '').filter(Boolean).join('|');
         payload.default_service_type = pricingForm.querySelector('select[name="default_service_type"]')?.value || '';
+        payload.airport_pickup_enabled = pricingForm.querySelector('input[name="airport_pickup_enabled"]')?.checked ? 'true' : 'false';
+        payload.airport_pickup_meet_greet_label = pricingForm.querySelector('input[name="airport_pickup_meet_greet_label"]')?.value || '';
+        payload.airport_pickup_curbside_label = pricingForm.querySelector('input[name="airport_pickup_curbside_label"]')?.value || '';
+        payload.airport_pickup_meet_greet_fee_cents = pricingForm.querySelector('input[name="airport_pickup_meet_greet_fee_cents"]')?.value || '';
+        payload.airport_pickup_default_mode = pricingForm.querySelector('select[name="airport_pickup_default_mode"]')?.value || '';
         const routeCards = Array.from(pricingForm.querySelectorAll('[data-route-card]'));
         payload.route_count = String(routeCards.length);
         try {
+          for (let index = 0; index < vehicleCards.length; index += 1) {
+            const card = vehicleCards[index];
+            const label = card.querySelector('[data-vehicle-label]')?.value || '';
+            if (!label.trim()) {
+              throw new Error('Every vehicle needs a label.');
+            }
+            const file = card.querySelector('[data-vehicle-image-file]')?.files?.[0] || null;
+            const existingImage = card.querySelector('[data-vehicle-image-value]')?.value || '';
+            const nextImage = file ? await uploadVehicleImage(file, label) : existingImage;
+            // Any image size allowed
+            const hidden = card.querySelector('[data-vehicle-image-value]');
+            if (hidden) hidden.value = nextImage;
+          }
+          payload.vehicle_options = JSON.stringify(vehicleCards.map((card, index) => ({
+            id: card.dataset.vehicleId || ('vehicle_' + (index + 1)),
+            label: card.querySelector('[data-vehicle-label]')?.value || '',
+            subtitle: card.querySelector('[data-vehicle-subtitle]')?.value || '',
+            capacity: Number.parseInt(card.querySelector('[data-vehicle-capacity]')?.value || '0', 10) || 0,
+            mileage_rate: Number.parseFloat(card.querySelector('[data-vehicle-mileage-rate]')?.value || '0') || 0,
+            image_url: card.querySelector('[data-vehicle-image-value]')?.value || '',
+            disabled: !!card.querySelector('[data-vehicle-disabled]')?.checked
+          })));
           for (let index = 0; index < routeCards.length; index += 1) {
             const card = routeCards[index];
             const file = card.querySelector('[data-route-image-file]')?.files?.[0] || null;
@@ -4900,6 +5699,73 @@ const renderAdminPage = (rows, pricing = {}) => {
       });
     }
 
+    const addVehicleButton = document.getElementById('add-vehicle');
+    if (addVehicleButton && pricingForm) {
+      addVehicleButton.addEventListener('click', () => {
+        const pricingGrid = pricingForm.querySelector('.pricing-grid');
+        if (!pricingGrid) return;
+        const count = pricingForm.querySelectorAll('[data-vehicle-card]').length;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'pricing-card';
+        wrapper.dataset.vehicleCard = 'true';
+        wrapper.dataset.vehicleId = 'vehicle_' + Date.now();
+        wrapper.innerHTML =
+          '<strong>Vehicle ' + (count + 1) + '</strong>' +
+          '<span>Shown on the website and both apps.</span>' +
+          '<div class="pricing-card-order">' +
+          '<button class="mini-action" type="button" data-move-vehicle="up">Move Up</button>' +
+          '<button class="mini-action" type="button" data-move-vehicle="down">Move Down</button>' +
+          '</div>' +
+          '<input type="text" data-vehicle-label value="" placeholder="Vehicle name" />' +
+          '<input type="text" data-vehicle-subtitle value="" placeholder="Subtitle" />' +
+          '<input type="number" min="1" step="1" data-vehicle-capacity value="4" placeholder="Seats" />' +
+          '<input type="number" min="0.01" step="0.01" data-vehicle-mileage-rate value="2.50" placeholder="Mileage rate ($/mi)" />' +
+          '<label style="display:flex;align-items:center;gap:8px;font-size:0.9em;color:#f7f5f2;margin:6px 0;"><input type="checkbox" data-vehicle-disabled /> Disabled</label>' +
+          '<input type="hidden" data-vehicle-image-value value="" />' +
+          '<input type="file" data-vehicle-image-file accept="image/png,image/jpeg,image/webp" />' +
+          '<button class="mini-action" type="button" data-clear-vehicle-image>Clear Image</button>' +
+          '<button class="mini-action" type="button" data-clear-vehicle>Remove Vehicle</button>';
+        pricingGrid.insertBefore(wrapper, pricingGrid.querySelector('[data-route-card]') || null);
+        renumberVehicleCards();
+        wrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const labelInput = wrapper.querySelector('[data-vehicle-label]');
+        if (labelInput) labelInput.focus();
+      });
+    }
+
+    document.addEventListener('click', (event) => {
+      const clearVehicleImageButton = event.target.closest('[data-clear-vehicle-image]');
+      if (clearVehicleImageButton) {
+        const card = clearVehicleImageButton.closest('[data-vehicle-card]');
+        const hidden = card?.querySelector('[data-vehicle-image-value]');
+        const fileInput = card?.querySelector('[data-vehicle-image-file]');
+        const preview = card?.querySelector('.route-image-preview');
+        if (hidden) hidden.value = '';
+        if (fileInput) fileInput.value = '';
+        if (preview) preview.remove();
+        return;
+      }
+      const moveVehicleButton = event.target.closest('[data-move-vehicle]');
+      if (moveVehicleButton && pricingForm) {
+        const card = moveVehicleButton.closest('[data-vehicle-card]');
+        const pricingGrid = pricingForm.querySelector('.pricing-grid');
+        if (!card || !pricingGrid) return;
+        if (moveVehicleButton.dataset.moveVehicle === 'up' && card.previousElementSibling && card.previousElementSibling.hasAttribute('data-vehicle-card')) {
+          pricingGrid.insertBefore(card, card.previousElementSibling);
+        }
+        if (moveVehicleButton.dataset.moveVehicle === 'down' && card.nextElementSibling && card.nextElementSibling.hasAttribute('data-vehicle-card')) {
+          pricingGrid.insertBefore(card.nextElementSibling, card);
+        }
+        renumberVehicleCards();
+        return;
+      }
+      const clearVehicleButton = event.target.closest('[data-clear-vehicle]');
+      if (clearVehicleButton) {
+        clearVehicleButton.closest('[data-vehicle-card]')?.remove();
+        renumberVehicleCards();
+      }
+    });
+
     const adminEmailsForm = document.getElementById('admin-emails-form');
     const adminEmailsStatus = document.getElementById('admin-emails-status');
     if (adminEmailsForm) {
@@ -4909,18 +5775,6 @@ const renderAdminPage = (rows, pricing = {}) => {
         const query = new URLSearchParams({ admin_emails: formData.get('admin_emails') || '' });
         if (adminEmailsStatus) adminEmailsStatus.textContent = 'Saving...';
         window.location.href = '/admin/admin-emails?' + query.toString();
-      });
-    }
-
-    const driverAccountsForm = document.getElementById('driver-accounts-form');
-    const driverAccountsStatus = document.getElementById('driver-accounts-status');
-    if (driverAccountsForm) {
-      driverAccountsForm.addEventListener('submit', (event) => {
-        event.preventDefault();
-        const formData = new FormData(driverAccountsForm);
-        const query = new URLSearchParams({ driver_emails: formData.get('driver_emails') || '' });
-        if (driverAccountsStatus) driverAccountsStatus.textContent = 'Saving...';
-        window.location.href = '/admin/driver-accounts?' + query.toString();
       });
     }
 
@@ -4956,6 +5810,153 @@ const renderAdminPage = (rows, pricing = {}) => {
         if (!ok) return;
         button.disabled = true;
         window.location.href = '/admin/reject?id=' + encodeURIComponent(id);
+      });
+    });
+  </script>
+</body>
+</html>
+  `;
+};
+
+const renderDriverRegistrationRequestsPage = (requests = []) => {
+  const pendingCount = requests.filter((request) => String(request.status || '').toLowerCase() === 'pending').length;
+  const cards = requests
+    .map((request) => {
+      const images = Array.isArray(request.car_images) ? request.car_images.filter(Boolean) : [];
+      const heroImage = String(request.profile_photo_url || '').trim();
+      const imageList = heroImage ? [heroImage, ...images.filter((image) => image !== heroImage)] : images;
+      const imageMarkup = imageList.length
+        ? imageList.map((image) => `<img class="driver-image" src="${escapeHtml(image)}" alt="Driver profile photo" />`).join('')
+        : '<div class="driver-empty-image">No images uploaded</div>';
+      const isPending = String(request.status || '').toLowerCase() === 'pending';
+      return `
+        <article class="driver-request-card" data-request-id="${escapeHtml(request.id)}">
+          <div class="driver-request-head">
+            <div>
+              <p class="driver-request-eyebrow">Driver Request #${escapeHtml(request.id)}</p>
+              <h3>${escapeHtml(request.first_name)} ${escapeHtml(request.last_name)}</h3>
+            </div>
+            <span class="driver-status driver-status-${escapeHtml(String(request.status || 'pending').toLowerCase())}">${escapeHtml(request.status || 'pending')}</span>
+          </div>
+          <div class="driver-request-grid">
+            <div><strong>Email</strong><span>${escapeHtml(request.email)}</span></div>
+            <div><strong>Password</strong><span>${escapeHtml(request.password)}</span></div>
+            <div><strong>Car model</strong><span>${escapeHtml(request.car_model)}</span></div>
+            <div><strong>Profile photo</strong><span>${heroImage ? 'Provided' : 'Missing'}</span></div>
+            <div><strong>Submitted</strong><span>${escapeHtml(request.created_at)}</span></div>
+          </div>
+          <div class="driver-image-grid">${imageMarkup}</div>
+          ${request.review_notes ? `<p class="driver-notes"><strong>Notes:</strong> ${escapeHtml(request.review_notes)}</p>` : ''}
+          <div class="driver-actions">
+            ${
+              isPending
+                ? `<button class="danger" type="button" data-driver-approve="${escapeHtml(request.id)}">Approve</button>
+                   <button class="danger" type="button" data-driver-reject="${escapeHtml(request.id)}">Reject</button>`
+                : `<span class="driver-status-text">Reviewed at ${escapeHtml(request.reviewed_at || '—')}</span>
+                   <button class="danger" type="button" data-driver-toggle-disabled="${escapeHtml(request.id)}" data-driver-disabled="${request.disabled ? '1' : '0'}">${request.disabled ? 'Enable Driver' : 'Disable Driver'}</button>`
+            }
+          </div>
+        </article>
+      `;
+    })
+    .join('');
+
+  return `
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Driver Registration Requests</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0b0b0b; color: #f4ecd9; margin: 0; }
+    header { padding: 20px 32px; border-bottom: 1px solid rgba(240,178,71,0.3); display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; }
+    h1 { margin: 0; font-size: 1.4rem; letter-spacing: 0.12em; text-transform: uppercase; }
+    main { padding: 24px 32px; }
+    .actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom: 18px; }
+    .danger { background: transparent; border: 1px solid rgba(240,178,71,0.4); color: #f0b247; padding: 8px 14px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.7rem; cursor: pointer; text-decoration:none; display:inline-flex; align-items:center; }
+    .summary { color: rgba(247,245,242,0.72); font-size: 0.85rem; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 14px; }
+    .driver-request-card { border: 1px solid rgba(240,178,71,0.18); border-radius: 18px; padding: 16px; background: rgba(255,255,255,0.02); display:grid; gap: 14px; }
+    .driver-request-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+    .driver-request-eyebrow { margin:0 0 4px; color:#f0b247; text-transform:uppercase; letter-spacing:0.14em; font-size:0.7rem; }
+    .driver-request-card h3 { margin:0; font-size:1.15rem; }
+    .driver-status { padding: 6px 10px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.62rem; border: 1px solid rgba(240,178,71,0.26); }
+    .driver-status-pending { color: #f0b247; }
+    .driver-status-approved { color: #8ef0b1; }
+    .driver-status-rejected { color: #ff9d9d; }
+    .driver-request-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:10px; }
+    .driver-request-grid div { border:1px solid rgba(240,178,71,0.15); border-radius: 14px; padding: 12px; background: rgba(0,0,0,0.18); }
+    .driver-request-grid strong { display:block; color:#f0b247; text-transform:uppercase; letter-spacing:0.1em; font-size:0.68rem; margin-bottom:6px; }
+    .driver-request-grid span, .driver-notes, .summary { color: rgba(247,245,242,0.78); font-size: 0.86rem; line-height: 1.5; }
+    .driver-image-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+    .driver-image { width:100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 14px; border: 1px solid rgba(240,178,71,0.18); background: rgba(0,0,0,0.3); }
+    .driver-empty-image { border:1px dashed rgba(240,178,71,0.24); border-radius: 14px; padding: 16px; color: rgba(247,245,242,0.6); font-size: 0.82rem; }
+    .driver-actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .driver-status-text { color: rgba(247,245,242,0.6); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Driver Registration Requests</h1>
+    <span class="summary">${escapeHtml(String(pendingCount))} pending requests</span>
+  </header>
+  <main>
+    <div class="actions">
+      <a class="danger" href="/admin">Back to Admin</a>
+      <button class="danger" id="refresh-requests" type="button">Refresh</button>
+    </div>
+    <section class="grid" id="driver-request-grid">
+      ${cards || '<div class="summary">No driver registration requests yet.</div>'}
+    </section>
+  </main>
+  <script>
+    const refreshButton = document.getElementById('refresh-requests');
+    refreshButton?.addEventListener('click', () => {
+      window.location.reload();
+    });
+    document.querySelectorAll('[data-driver-approve]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const id = button.dataset.driverApprove;
+        if (!id) return;
+        if (!confirm('Approve this driver registration request?')) return;
+        button.disabled = true;
+        await fetch('/admin/driver-registration-requests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, status: 'approved' })
+        });
+        window.location.reload();
+      });
+    });
+    document.querySelectorAll('[data-driver-reject]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const id = button.dataset.driverReject;
+        if (!id) return;
+        if (!confirm('Reject this driver registration request?')) return;
+        button.disabled = true;
+        await fetch('/admin/driver-registration-requests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, status: 'rejected' })
+        });
+        window.location.reload();
+      });
+    });
+    document.querySelectorAll('[data-driver-toggle-disabled]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const id = button.dataset.driverToggleDisabled;
+        const isDisabled = button.dataset.driverDisabled === '1';
+        if (!id) return;
+        const action = isDisabled ? 'enable' : 'disable';
+        if (!confirm((isDisabled ? 'Enable' : 'Disable') + ' this driver?')) return;
+        button.disabled = true;
+        await fetch('/admin/driver-registration-requests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, action })
+        });
+        window.location.reload();
       });
     });
   </script>
@@ -5127,6 +6128,7 @@ export default {
       url.pathname === '/admin/service-area' ||
       url.pathname === '/admin/promos' ||
       url.pathname === '/admin/admin-emails' ||
+      url.pathname === '/admin/driver-registration-requests' ||
       url.pathname === '/admin/driver-accounts' ||
       url.pathname === '/admin/notify-update' ||
       url.pathname === '/admin/booking-price' ||
@@ -5140,8 +6142,7 @@ export default {
       url.pathname === '/admin/inbox/reply' ||
       url.pathname === '/crm' ||
       url.pathname === '/crm/export' ||
-      url.pathname === '/crm/profile' ||
-      url.pathname === '/sms'
+      url.pathname === '/crm/profile'
     ) {
       const auth = parseBasicAuth(request.headers.get('Authorization'));
       const adminUsername = String(env.ADMIN_USERNAME || 'admin');
@@ -5149,13 +6150,6 @@ export default {
         return unauthorized();
       }
     }
-
-if (url.pathname === '/sms') {
-  if (request.method !== 'POST') {
-    return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
-  }
-  return handleInboundSms(env, request);
-}
 
     if (url.pathname === '/api/config/verification-settings') {
       if (request.method !== 'GET') {
@@ -5395,59 +6389,34 @@ if (url.pathname === '/sms') {
         if (!authPayload) {
           return jsonResponse({ ok: false, error: 'Invalid access token' }, 401, origin);
         }
-
-        let payload;
-        try {
-          payload = await request.json();
-        } catch (error) {
-          return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
-        }
-
+        // Parse request JSON payload
+        const payload = await request.json();
         const phone = String(payload?.phone || '').trim();
         if (!phone) {
           return jsonResponse({ ok: false, error: 'Phone number is required.' }, 400, origin);
         }
-// Check Twilio configuration
-if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_VERIFY_SERVICE_SID) {
-  return jsonResponse({ ok: false, error: 'Twilio is not configured.' }, 500, origin);
-}
-  // 40‑second cooldown per phone number
-  const now = Math.floor(Date.now() / 1000);
-  await env.DB.prepare('CREATE TABLE IF NOT EXISTS phone_verification_cooldown (phone TEXT PRIMARY KEY, last_sent INTEGER)').run();
-  const cooldownRecord = await env.DB.prepare('SELECT last_sent FROM phone_verification_cooldown WHERE phone = ?').bind(phone).first();
-  if (cooldownRecord && now - cooldownRecord.last_sent < 40) {
-    const wait = 40 - (now - cooldownRecord.last_sent);
-    return jsonResponse({ ok: false, error: `Please wait ${wait} seconds before requesting another code.` }, 429, origin);
-  }
 
+        if (!twilioVerifyConfigured(env)) {
+          return jsonResponse({ ok: false, error: 'Twilio Verify is not configured.' }, 500, origin);
+        }
 
+        const verifyResult = await sendTwilioVerify(env, { to: phone, channel: 'sms' });
+        if (!verifyResult.ok) {
+          return jsonResponse({ ok: false, error: verifyResult.error || 'Failed to initiate verification.' }, 500, origin);
+        }
+        const verifyData = { sid: verifyResult.sid || '' };
 
+        // Store a reference in D1 (using verification SID)
+        await ensureCrmTables(env);
+        const userId = String(authPayload.sub || authPayload.user_id || '').trim();
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+        await env.DB.prepare(
+          `INSERT INTO phone_verification_codes (user_id, phone, code, expires_at, created_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET phone = ?, expires_at = ?, created_at = ?`
+        ).bind(userId, phone, verifyData?.sid || '', expiresAt, new Date().toISOString(), phone, expiresAt, new Date().toISOString()).run();
 
-
-// Send verification via Twilio Verify
-const twilioPayload = new URLSearchParams({
-  To: phone,
-  Channel: 'sms'
-}).toString();
-
-const authHeader = 'Basic ' + btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
-
-const twilioResponse = await fetch(`https://verify.twilio.com/v2/Services/${env.TWILIO_VERIFY_SERVICE_SID}/Verifications`, {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/x-www-form-urlencoded',
-    'Authorization': authHeader
-  },
-  body: twilioPayload
-});
-
-if (!twilioResponse.ok) {
-  const errText = await twilioResponse.text();
-  return jsonResponse({ ok: false, error: 'Failed to send verification code via Twilio.', rawResponse: errText }, 500, origin);
-} 
-await env.DB.prepare('INSERT INTO phone_verification_cooldown (phone, last_sent) VALUES (?, ?) ON CONFLICT(phone) DO UPDATE SET last_sent = ?').bind(phone, now, now).run();
-return jsonResponse({ ok: true, message: 'Verification code sent to your phone.' }, 200, origin);
-
+        return jsonResponse({ ok: true, message: 'Verification code sent via Twilio Verify.' }, 200, origin);
       } catch (error) {
         return jsonResponse(
           {
@@ -5480,8 +6449,6 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
         }
 
         let payload;
-        const userId = String(authPayload.sub || authPayload.user_id || '').trim();
-        const email = String(authPayload.email || '').trim().toLowerCase();
         try {
           payload = await request.json();
         } catch (error) {
@@ -5490,41 +6457,44 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
 
         const phone = String(payload?.phone || '').trim();
         const code = String(payload?.code || '').trim();
+        console.log('🔎 VerifyPhone payload:', { phone, code });
 
         if (!phone || !code) {
           return jsonResponse({ ok: false, error: 'Phone and code are required.' }, 400, origin);
         }
 
-        // Verify code via Twilio Verify
+        // Verify code with Twilio Verify service
+        // Ensure required Twilio env vars are present
         if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_VERIFY_SERVICE_SID) {
-          return jsonResponse({ ok: false, error: 'Twilio is not configured.' }, 500, origin);
+          return jsonResponse({ ok: false, error: 'Twilio Verify is not properly configured.' }, 500, origin);
+        }
+        await ensureCrmTables(env);
+        const userId = String(authPayload.sub || authPayload.user_id || '').trim();
+        const email = String(authPayload.email || '').trim().toLowerCase();
+        const authHeaderTwilio = btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
+        const verificationCheckResp = await fetch(
+          `https://verify.twilio.com/v2/Services/${env.TWILIO_VERIFY_SERVICE_SID}/VerificationCheck`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Basic ${authHeaderTwilio}`,
+              'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: new URLSearchParams({ To: phone, Code: code }).toString()
+          }
+        );
+        const verificationCheckData = await verificationCheckResp.json().catch(() => null);
+console.log('🔎 Twilio VerificationCheck response:', JSON.stringify(verificationCheckData));
+        console.log('🔎 Twilio VerificationCheck response:', verificationCheckData);
+        if (!verificationCheckResp.ok || verificationCheckData?.status !== 'approved') {
+          const twilioMsg = verificationCheckData?.error_message || verificationCheckData?.status || verificationCheckData?.error || 'unknown';
+          return jsonResponse({ ok: false, error: `Invalid verification code. Twilio says: ${twilioMsg}` }, 400, origin);
         }
 
-        const twilioPayload = new URLSearchParams({
-          To: phone,
-          Code: code
-        }).toString();
-
-        const authHeader = 'Basic ' + btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
-
-        const twilioResponse = await fetch(`https://verify.twilio.com/v2/Services/${env.TWILIO_VERIFY_SERVICE_SID}/VerificationCheck`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Authorization': authHeader
-          },
-          body: twilioPayload
-        });
-
-        if (!twilioResponse.ok) {
-          const errText = await twilioResponse.text();
-          return jsonResponse({ ok: false, error: 'Failed to verify code via Twilio.', rawResponse: errText }, 500, origin);
-        }
-
-        const verificationResult = await twilioResponse.json();
-        if (verificationResult.status !== 'approved') {
-          return jsonResponse({ ok: false, error: 'Invalid verification code.' }, 400, origin);
-        }
+        // Mark phone as verified
+        await env.DB.prepare(
+          'DELETE FROM phone_verification_codes WHERE user_id = ?'
+        ).bind(userId).run();
 
         // Update customer profile to mark phone as verified
         await ensureCustomerProfile(env, {
@@ -5612,10 +6582,19 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
         return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
       }
 
+      let payload = {};
+      try {
+        payload = await request.json();
+      } catch (error) {
+        payload = {};
+      }
+
       const authHeader = request.headers.get('Authorization') || '';
-      const token = authHeader.startsWith('Bearer ')
+      const headerToken = authHeader.startsWith('Bearer ')
         ? authHeader.replace('Bearer ', '').trim()
         : '';
+      const bodyToken = String(payload?.access_token || payload?.accessToken || '').trim();
+      const token = headerToken || bodyToken;
       if (!token) {
         return jsonResponse({ ok: false, error: 'Missing access token' }, 401, origin);
       }
@@ -5731,17 +6710,25 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
         if (!email) {
           return jsonResponse({ ok: true, bookings: [] }, 200, origin);
         }
+        await ensureBookingColumns(env);
         const { results } = await env.DB.prepare(
-          `SELECT *
-           FROM bookings
-           WHERE LOWER(customer_email) = ?
-           ORDER BY created_at DESC
+          `SELECT b.*, (d.first_name || ' ' || d.last_name) AS assigned_driver_name, d.photo_url AS assigned_driver_photo
+           FROM bookings b
+           LEFT JOIN drivers d ON b.driver_id = d.id
+           WHERE LOWER(b.customer_email) = ?
+           ORDER BY b.created_at DESC
            LIMIT 100`
         )
           .bind(email)
           .all();
 
-        return jsonResponse({ ok: true, bookings: results || [] }, 200, origin);
+        const bookings = (results || []).map(r => ({
+          ...r,
+          driver_name: r.driver_name || r.assigned_driver_name || null,
+          driver_photo_url: r.driver_photo_url || r.assigned_driver_photo || null
+        }));
+
+        return jsonResponse({ ok: true, bookings }, 200, origin);
       } catch (error) {
         return jsonResponse(
           {
@@ -6302,19 +7289,154 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       const auth = await requireAdminApiAuth(request, env, origin);
       if (auth.response) return auth.response;
     }
-
-    if (url.pathname.startsWith('/api/driver/')) {
+    // Vehicle image upload endpoint
+    if (url.pathname === '/api/vehicles/upload-image' && request.method === 'POST') {
+      try {
+        const form = await request.formData();
+        const file = form.get('file');
+        const label = form.get('label')?.toString() || '';
+        if (!file || !(file instanceof File)) throw new Error('File not provided');
+        const mime = file.type || '';
+        const arrayBuffer = await file.arrayBuffer();
+        let ext = mime ? mime.split('/')[1] : '';
+        if (!ext || ext === 'octet-stream' || ext.length > 5) {
+          ext = file.name ? file.name.split('.').pop() : 'png';
+        }
+        const sanitizedLabel = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'vehicle';
+        const filename = `${sanitizedLabel}-${Date.now()}.${ext}`;
+        const kvKey = `assets/vehicles/${filename}`;
+        await env.VEHICLE_IMAGES.put(kvKey, arrayBuffer);
+        const imageUrl = `${url.origin}/${kvKey}`;
+        return jsonResponse({ ok: true, url: imageUrl }, 200, origin);
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message || 'Upload failed' }, 400, origin);
+      }
+    }
+    // Serve vehicle and driver images from KV
+    if ((url.pathname.startsWith('/assets/vehicles/') || url.pathname.startsWith('/assets/drivers/')) && request.method === 'GET') {
+      const kvKey = url.pathname.slice(1); // remove leading '/'
+      const obj = await env.VEHICLE_IMAGES.get(kvKey, { type: 'arrayBuffer' });
+      if (!obj) return new Response('Not found', { status: 404 });
+      const ext = kvKey.split('.').pop().toLowerCase();
+      const mime = ext === 'png' ? 'image/png' : (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'application/octet-stream';
+      return new Response(obj, { status: 200, headers: { 'Content-Type': mime } });
+    }
+    if (
+      url.pathname.startsWith('/api/driver/') &&
+      url.pathname !== '/api/driver/registration-requests' &&
+      url.pathname !== '/api/driver/list'
+    ) {
       const auth = await requireDriverApiAuth(request, env, origin);
       if (auth.response) return auth.response;
     }
 
+    // Driver list endpoint
+    if (url.pathname === '/api/driver/list' && request.method === 'GET') {
+      try {
+        await ensureDriversTable(env);
+        try {
+          await syncApprovedDrivers(env);
+        } catch (syncErr) {
+          console.error('Driver sync warning:', syncErr);
+        }
+        const { results } = await env.DB.prepare(
+          `SELECT id, first_name, last_name, photo_url, language, music, disabled FROM drivers ORDER BY first_name`
+        ).all();
+        const drivers = (results || []).filter(r => !r.disabled).map(r => ({
+          id: r.id,
+          name: `${r.first_name} ${r.last_name}`,
+          photo_url: r.photo_url,
+          language: r.language,
+          music: r.music
+        }));
+        return jsonResponse({ ok: true, drivers }, 200, origin);
+      } catch (err) {
+        console.error('Driver list endpoint error:', err);
+        return jsonResponse({ ok: false, error: err.message || 'Failed to fetch drivers' }, 500, origin);
+      }
+    }
+
     if (url.pathname === '/api/driver/me') {
-      if (request.method !== 'GET') {
+      if (!['GET', 'POST', 'PATCH'].includes(request.method)) {
         return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
       }
+      await ensureDriversTable(env);
       const auth = await requireDriverApiAuth(request, env, origin);
       if (auth.response) return auth.response;
-      return jsonResponse({ ok: true, email: auth.email }, 200, origin);
+
+      const driverResult = await loadDriverRecordByEmail(env, auth.email);
+
+      if (!driverResult) {
+        return jsonResponse({ ok: false, error: 'Driver not found' }, 404, origin);
+      }
+
+      if (request.method !== 'GET') {
+        let payload = {};
+        try {
+          payload = await request.json();
+        } catch (error) {
+          return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+        }
+
+        const language = String(payload?.language || '').trim() || null;
+        const music = String(payload?.music || '').trim() || null;
+        let photoUrl = String(payload?.photo_url || '').trim() || null;
+
+        if (photoUrl && photoUrl.startsWith('data:image')) {
+          try {
+            const matches = photoUrl.match(/^data:image\/([a-zA-Z0-9]+);base64,(.+)$/);
+            if (matches) {
+              const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+              const base64Data = matches[2];
+              const binaryString = atob(base64Data);
+              const len = binaryString.length;
+              const bytes = new Uint8Array(len);
+              for (let i = 0; i < len; i += 1) {
+                bytes[i] = binaryString.charCodeAt(i);
+              }
+              const kvKey = `assets/drivers/driver-${driverResult.id}-${Date.now()}.${ext}`;
+              await env.VEHICLE_IMAGES.put(kvKey, bytes.buffer);
+              photoUrl = `${url.origin}/${kvKey}`;
+            }
+          } catch (imgErr) {
+            console.error('Error uploading base64 driver photo to KV:', imgErr);
+          }
+        }
+
+        const now = new Date().toISOString();
+        await env.DB.prepare(
+          `UPDATE drivers
+           SET language = ?,
+               music = ?,
+               photo_url = ?,
+               updated_at = ?
+           WHERE id = ?`
+        )
+          .bind(language, music, photoUrl, now, driverResult.id)
+          .run();
+          // Propagate updated driver photo to existing bookings and registration requests
+          await env.DB.prepare('UPDATE bookings SET driver_photo_url = ? WHERE driver_id = ?')
+            .bind(photoUrl, driverResult.id)
+            .run();
+          await env.DB.prepare('UPDATE driver_registration_requests SET profile_photo_url = ? WHERE LOWER(email) = ?')
+            .bind(photoUrl, auth.email.toLowerCase())
+            .run();
+      }
+
+      const updatedDriver = request.method === 'GET'
+        ? driverResult
+        : (await loadDriverRecordByEmail(env, auth.email)) || driverResult;
+
+      const driverInfo = {
+        id: updatedDriver.id,
+        email: auth.email,
+        name: `${updatedDriver.first_name} ${updatedDriver.last_name}`.trim(),
+        photo_url: updatedDriver.photo_url,
+        language: updatedDriver.language,
+        music: updatedDriver.music
+      };
+
+      return jsonResponseNoCache({ ok: true, ...driverInfo }, 200, origin);
     }
 
     if (url.pathname === '/api/driver/bookings') {
@@ -6322,14 +7444,31 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
         return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
       }
 
+      const auth = await requireDriverApiAuth(request, env, origin);
+      if (auth.response) return auth.response;
+
       await ensureBookingColumns(env);
-      const { results } = await env.DB.prepare(
-        `SELECT * FROM bookings
-         WHERE LOWER(COALESCE(payment_status, '')) IN ('paid', 'approved_email_sent')
-           AND LOWER(COALESCE(driver_status, '')) != 'completed'
-         ORDER BY pickup_date ASC, pickup_time ASC, created_at DESC
-         LIMIT 300`
-      ).all();
+      const driverRecord = await loadDriverRecordByEmail(env, auth.email);
+      const driverId = driverRecord?.id ? Number(driverRecord.id) : null;
+      const driverLanguage = normalizePreferredLanguage(driverRecord?.language || '');
+      const driverFilterClause = driverId
+        ? 'AND (b.driver_id = ? OR (b.driver_id IS NULL AND (COALESCE(b.preferred_language, \'\') = \'\' OR LOWER(COALESCE(b.preferred_language, \'\')) = LOWER(?))))'
+        : 'AND b.driver_id IS NULL';
+      const query = `
+        SELECT
+          b.*,
+          COALESCE(b.driver_name, (d.first_name || ' ' || d.last_name)) AS assigned_driver_name,
+          COALESCE(b.driver_photo_url, d.photo_url) AS assigned_driver_photo
+        FROM bookings b
+        LEFT JOIN drivers d ON b.driver_id = d.id
+        WHERE LOWER(COALESCE(b.payment_status, '')) IN ('paid', 'approved_email_sent')
+          AND LOWER(COALESCE(b.driver_status, '')) != 'completed'
+          ${driverFilterClause}
+        ORDER BY b.pickup_date ASC, b.pickup_time ASC, b.created_at DESC
+        LIMIT 300
+      `;
+      const prepared = env.DB.prepare(query);
+      const { results } = driverId ? await prepared.bind(driverId, driverLanguage).all() : await prepared.all();
       return jsonResponse({ ok: true, bookings: (results || []).map(serializeAdminBooking) }, 200, origin);
     }
 
@@ -6460,7 +7599,7 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
         return jsonResponse({ ok: false, error: 'Only pending bookings can be approved' }, 400, origin);
       }
 
-      const result = await approveBookingAndEmail(env, booking);
+      const result = await approveBookingAndEmail(env, booking, ctx);
       if (!result.ok) {
         return jsonResponse({ ok: false, error: result.error }, 500, origin);
       }
@@ -6821,8 +7960,45 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       const hourlyRate = Number.parseFloat(payload?.hourly_rate);
       const mileageRateSuv = Number.parseFloat(payload?.mileage_rate_suv);
       const mileageRateSedan = Number.parseFloat(payload?.mileage_rate_sedan);
-      const serviceTypes = normalizeServiceTypes(payload?.service_types || '');
-      const defaultServiceType = String(payload?.default_service_type || serviceTypes[0] || DEFAULT_SERVICE_TYPE).trim();
+      const rawVehicleOptions = normalizeVehicleOptions(payload?.vehicle_options || payload?.service_types || '');
+      // Upload any base64 vehicle images to KV and replace with https:// URLs
+      const vehicleOptions = await Promise.all(rawVehicleOptions.map(async (option) => {
+        if (option.image_url && option.image_url.startsWith('data:image')) {
+          try {
+            const matches = option.image_url.match(/^data:image\/([a-zA-Z0-9]+);base64,(.+)$/);
+            if (matches) {
+              const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+              const binaryString = atob(matches[2]);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i += 1) bytes[i] = binaryString.charCodeAt(i);
+              const kvKey = `assets/vehicles/${option.id}-${Date.now()}.${ext}`;
+              await env.VEHICLE_IMAGES.put(kvKey, bytes.buffer);
+              return { ...option, image_url: `${url.origin}/${kvKey}` };
+            }
+          } catch (imgErr) {
+            console.error('Error uploading vehicle image to KV:', imgErr);
+          }
+        }
+        return option;
+      }));
+      const serviceTypes = normalizeServiceTypes(vehicleOptions.map((option) => option.label));
+      const defaultServiceTypeRaw = String(payload?.default_service_type || '').trim();
+      const defaultServiceType = serviceTypes.includes(defaultServiceTypeRaw)
+        ? defaultServiceTypeRaw
+        : (serviceTypes[0] || DEFAULT_SERVICE_TYPE);
+      const airportPickupEnabled = normalizeSettingBoolean(payload?.airport_pickup_enabled, DEFAULT_AIRPORT_PICKUP_SETTINGS.enabled);
+      const airportPickupMeetGreetLabel = String(payload?.airport_pickup_meet_greet_label || DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetLabel).trim() || DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetLabel;
+      const airportPickupCurbsideLabel = String(payload?.airport_pickup_curbside_label || DEFAULT_AIRPORT_PICKUP_SETTINGS.curbsideLabel).trim() || DEFAULT_AIRPORT_PICKUP_SETTINGS.curbsideLabel;
+      const airportPickupMeetGreetFeeRaw = String(payload?.airport_pickup_meet_greet_fee_cents ?? `${DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetFeeCents}`).trim();
+      const airportPickupMeetGreetFeeCents = Math.max(
+        0,
+        Number.isFinite(Number.parseFloat(airportPickupMeetGreetFeeRaw))
+          ? (airportPickupMeetGreetFeeRaw.includes('.') ? Math.round(Number.parseFloat(airportPickupMeetGreetFeeRaw) * 100) : Math.round(Number.parseFloat(airportPickupMeetGreetFeeRaw)))
+          : DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetFeeCents
+      );
+      const airportPickupDefaultMode = String(payload?.airport_pickup_default_mode || DEFAULT_AIRPORT_PICKUP_SETTINGS.defaultMode).trim().toLowerCase() === 'meet_greet'
+        ? 'meet_greet'
+        : 'curbside';
       const requestedRouteCount = Number.parseInt(payload?.route_count || `${DEFAULT_FEATURED_ROUTES.length}`, 10);
       const routeCount = Number.isFinite(requestedRouteCount) && requestedRouteCount > 0
         ? requestedRouteCount
@@ -6856,6 +8032,9 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       if (!serviceTypes.includes(defaultServiceType)) {
         return jsonResponse({ ok: false, error: 'Default vehicle must match one of the vehicle options' }, 400, origin);
       }
+      if (!airportPickupEnabled) {
+        // No validation; keep the toggle editable.
+      }
       if (featuredRoutes.some((route) => !route.label || !Number.isFinite(route.price) || route.price <= 0)) {
         return jsonResponse({ ok: false, error: 'Every route needs a label and price' }, 400, origin);
       }
@@ -6865,7 +8044,13 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
         ['mileage_rate_suv', mileageRateSuv.toFixed(2)],
         ['mileage_rate_sedan', mileageRateSedan.toFixed(2)],
         ['service_types', JSON.stringify(serviceTypes)],
+        ['vehicle_options', JSON.stringify(vehicleOptions)],
         ['default_service_type', defaultServiceType],
+        ['airport_pickup_enabled', String(airportPickupEnabled)],
+        ['airport_pickup_meet_greet_label', airportPickupMeetGreetLabel],
+        ['airport_pickup_curbside_label', airportPickupCurbsideLabel],
+        ['airport_pickup_meet_greet_fee_cents', String(airportPickupMeetGreetFeeCents)],
+        ['airport_pickup_default_mode', airportPickupDefaultMode],
         ['route_count', String(featuredRoutes.length)],
         ...featuredRoutes.flatMap((route) => [
           [`${route.key}_label`, route.label],
@@ -6873,6 +8058,7 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
           [`${route.key}_image_url`, route.image_url || '']
         ])
       ]);
+      await sendCustomerUpdateNotification(env).catch(() => {});
       const pricing = await getPricingSettings(env);
       return jsonResponse(
         {
@@ -6883,10 +8069,16 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
             mileage_rate_sedan: mileageRateSedan,
             service_mile_rates: pricing.serviceMileRates,
             service_types: serviceTypes,
+            vehicle_options: vehicleOptions,
             default_service_type: defaultServiceType,
             featured_routes: featuredRoutes,
             airport_terminal_options: pricing.airportTerminalOptions,
             terminal_dropdown_required: pricing.terminalDropdownRequired,
+            airport_pickup_enabled: airportPickupEnabled,
+            airport_pickup_meet_greet_label: airportPickupMeetGreetLabel,
+            airport_pickup_curbside_label: airportPickupCurbsideLabel,
+            airport_pickup_meet_greet_fee_cents: airportPickupMeetGreetFeeCents,
+            airport_pickup_default_mode: airportPickupDefaultMode,
             promo_codes: pricing.promoCodes,
             socal_service_area_enabled: pricing.socalServiceAreaEnabled,
             socal_cities: pricing.socalCities,
@@ -6922,10 +8114,16 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
             mileage_rate_sedan: pricing.mileageRateSedan,
             service_mile_rates: pricing.serviceMileRates,
             service_types: pricing.serviceTypes,
+            vehicle_options: pricing.vehicleOptions,
             default_service_type: pricing.defaultServiceType,
             featured_routes: pricing.featuredRoutes,
             airport_terminal_options: pricing.airportTerminalOptions,
             terminal_dropdown_required: pricing.terminalDropdownRequired,
+            airport_pickup_enabled: pricing.airportPickupEnabled,
+            airport_pickup_meet_greet_label: pricing.airportPickupMeetGreetLabel,
+            airport_pickup_curbside_label: pricing.airportPickupCurbsideLabel,
+            airport_pickup_meet_greet_fee_cents: pricing.airportPickupMeetGreetFeeCents,
+            airport_pickup_default_mode: pricing.airportPickupDefaultMode,
             promo_codes: pricing.promoCodes,
             socal_service_area_enabled: pricing.socalServiceAreaEnabled,
             socal_cities: pricing.socalCities,
@@ -6971,23 +8169,74 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       return jsonResponse({ ok: true, admin_emails: normalized }, 200, origin);
     }
 
-    if (url.pathname === '/api/admin/driver-accounts') {
+    if (url.pathname === '/api/admin/driver-registration-requests') {
+      const auth = await requireAdminApiAuth(request, env, origin);
+      if (auth.response) return auth.response;
+
+      await ensureDriverRegistrationTables(env);
+
       if (request.method === 'GET') {
-        const pricing = await getPricingSettings(env);
-        return jsonResponse({ ok: true, driver_emails: pricing.driverEmails }, 200, origin);
+        const { results } = await env.DB.prepare(
+          'SELECT * FROM driver_registration_requests ORDER BY created_at DESC, id DESC LIMIT 200'
+        ).all();
+        await syncApprovedSupabaseDriverUsers(env, results || []);
+        return jsonResponse(
+          { ok: true, driver_registration_requests: (results || []).map(serializeDriverRegistrationRequest) },
+          200,
+          origin
+        );
       }
+
       if (request.method !== 'POST') {
         return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
       }
+
       let payload;
       try {
         payload = await request.json();
       } catch (error) {
         return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
       }
-      const normalized = normalizeAdminEmails(payload?.driver_emails || '');
-      await setPricingSetting(env, 'driver_emails', normalized.join(','));
-      return jsonResponse({ ok: true, driver_emails: normalized }, 200, origin);
+
+      const requestId = Number.parseInt(String(payload?.id || ''), 10);
+      const status = String(payload?.status || '').trim().toLowerCase();
+      if (!Number.isFinite(requestId) || requestId <= 0) {
+        return jsonResponse({ ok: false, error: 'Invalid request id' }, 400, origin);
+      }
+      if (!['approved', 'rejected'].includes(status)) {
+        return jsonResponse({ ok: false, error: 'Invalid request status' }, 400, origin);
+      }
+
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        `UPDATE driver_registration_requests
+         SET status = ?,
+             reviewed_at = ?,
+             updated_at = ?
+         WHERE id = ?`
+      )
+        .bind(status, now, now, requestId)
+        .run();
+      const updated = await env.DB.prepare(
+        'SELECT * FROM driver_registration_requests WHERE id = ? LIMIT 1'
+      ).bind(requestId).first();
+      if (updated && status === 'approved') {
+        await upsertDriverFromRegistrationRequest(env, updated);
+        await upsertSupabaseDriverAuthUser(env, updated);
+      }
+      const { results } = await env.DB.prepare(
+        'SELECT * FROM driver_registration_requests ORDER BY created_at DESC, id DESC LIMIT 200'
+      ).all();
+      await syncApprovedSupabaseDriverUsers(env, results || []);
+      return jsonResponse(
+        {
+          ok: true,
+          request: updated ? serializeDriverRegistrationRequest(updated) : null,
+          driver_registration_requests: (results || []).map(serializeDriverRegistrationRequest)
+        },
+        200,
+        origin
+      );
     }
 
     if (url.pathname === '/api/admin/bookings/price') {
@@ -7058,6 +8307,10 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
         'child_seats',
         'luggage',
         'contact_number',
+        'flight_number',
+        'airline',
+        'flight_gate',
+        'flight_terminal',
         'created_at'
       ];
 
@@ -7168,6 +8421,102 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       return htmlResponse(renderAdminPage(results || [], pricing));
     }
 
+    if (url.pathname === '/admin/driver-registration-requests') {
+      if (request.method !== 'POST' && request.method !== 'GET') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      if (request.method === 'GET') {
+        await ensureDriverRegistrationTables(env);
+        await ensureDriversTable(env);
+        const { results } = await env.DB.prepare(
+          'SELECT * FROM driver_registration_requests ORDER BY created_at DESC, id DESC LIMIT 200'
+        ).all();
+        const { results: driverRows } = await env.DB.prepare(
+          'SELECT LOWER(email) as email, disabled FROM drivers'
+        ).all();
+        const disabledByEmail = Object.fromEntries((driverRows || []).map((d) => [d.email, !!d.disabled]));
+        const serialized = (results || []).map((row) => ({
+          ...serializeDriverRegistrationRequest(row),
+          disabled: disabledByEmail[String(row.email || '').toLowerCase()] || false
+        }));
+        return htmlResponse(renderDriverRegistrationRequestsPage(serialized));
+      }
+
+      let payload = {};
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+
+      const requestId = Number.parseInt(String(payload?.id || ''), 10);
+      const action = String(payload?.action || '').trim().toLowerCase();
+      const status = String(payload?.status || '').trim().toLowerCase();
+      if (!Number.isFinite(requestId) || requestId <= 0) {
+        return jsonResponse({ ok: false, error: 'Invalid request id' }, 400, origin);
+      }
+
+      // Handle disable/enable driver action
+      if (action === 'disable' || action === 'enable') {
+        await ensureDriverRegistrationTables(env);
+        await ensureDriversTable(env);
+        const requestRow = await env.DB.prepare(
+          'SELECT * FROM driver_registration_requests WHERE id = ? LIMIT 1'
+        ).bind(requestId).first();
+        if (requestRow?.email) {
+          await env.DB.prepare(
+            'UPDATE drivers SET disabled = ?, updated_at = ? WHERE LOWER(email) = ?'
+          ).bind(action === 'disable' ? 1 : 0, new Date().toISOString(), String(requestRow.email).toLowerCase()).run();
+        }
+        const { results } = await env.DB.prepare(
+          'SELECT * FROM driver_registration_requests ORDER BY created_at DESC, id DESC LIMIT 200'
+        ).all();
+        return jsonResponse({ ok: true, driver_registration_requests: (results || []).map(serializeDriverRegistrationRequest) }, 200, origin);
+      }
+
+      if (!['approved', 'rejected'].includes(status)) {
+        return jsonResponse({ ok: false, error: 'Invalid request status' }, 400, origin);
+      }
+
+
+      await ensureDriverRegistrationTables(env);
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        `UPDATE driver_registration_requests
+         SET status = ?,
+             reviewed_at = ?,
+             updated_at = ?
+         WHERE id = ?`
+      )
+        .bind(status, now, now, requestId)
+        .run();
+      const updated = await env.DB.prepare(
+        'SELECT * FROM driver_registration_requests WHERE id = ? LIMIT 1'
+      ).bind(requestId).first();
+      if (updated && status === 'approved') {
+        await upsertDriverFromRegistrationRequest(env, updated);
+        await upsertSupabaseDriverAuthUser(env, updated);
+      }
+      const { results } = await env.DB.prepare(
+        'SELECT * FROM driver_registration_requests ORDER BY created_at DESC, id DESC LIMIT 200'
+      ).all();
+      await syncApprovedSupabaseDriverUsers(env, results || []);
+      return jsonResponse(
+        {
+          ok: true,
+          request: updated ? serializeDriverRegistrationRequest(updated) : null,
+          driver_registration_requests: (results || []).map(serializeDriverRegistrationRequest)
+        },
+        200,
+        origin
+      );
+    }
+
+    if (url.pathname === '/admin/driver-accounts') {
+      return Response.redirect(new URL('/admin/driver-registration-requests', request.url).toString(), 302);
+    }
+
     if (url.pathname === '/admin/promos') {
       if (request.method === 'GET') {
         const pricing = await getPricingSettings(env);
@@ -7199,7 +8548,7 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
 
     if (url.pathname === '/api/pricing') {
       const pricing = await getPricingSettings(env);
-      return jsonResponse(
+      return jsonResponseNoCache(
         {
           ok: true,
           pricing: {
@@ -7208,10 +8557,18 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
             mileage_rate_sedan: pricing.mileageRateSedan,
             service_mile_rates: pricing.serviceMileRates,
             service_types: pricing.serviceTypes,
+            vehicle_options: pricing.vehicleOptions.filter(v => !v.disabled),
             default_service_type: pricing.defaultServiceType,
             featured_routes: pricing.featuredRoutes,
-            airport_terminal_options: pricing.airportTerminalOptions,
+            airport_terminal_options: request.headers.get('x-lux-client') === 'app'
+              ? pricing.airportTerminalOptions.map(a => ({ code: a.airport_code, label: a.airport_name, value: a.airport_code }))
+              : pricing.airportTerminalOptions,
             terminal_dropdown_required: pricing.terminalDropdownRequired,
+            airport_pickup_enabled: pricing.airportPickupEnabled,
+            airport_pickup_meet_greet_label: pricing.airportPickupMeetGreetLabel,
+            airport_pickup_curbside_label: pricing.airportPickupCurbsideLabel,
+            airport_pickup_meet_greet_fee_cents: pricing.airportPickupMeetGreetFeeCents,
+            airport_pickup_default_mode: pricing.airportPickupDefaultMode,
             promo_codes: pricing.promoCodes,
             socal_service_area_enabled: pricing.socalServiceAreaEnabled,
             socal_cities: pricing.socalCities,
@@ -7222,7 +8579,36 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
         origin
       );
     }
-
+    // New endpoint: return list of vehicle options (no cache)
+    if (url.pathname === '/api/vehicles') {
+      if (request.method !== 'GET') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      const pricing = await getPricingSettings(env);
+      return jsonResponseNoCache({ ok: true, vehicle_options: pricing.vehicleOptions }, 200, origin);
+    }
+        // New endpoint: return driver profile (no cache)
+    if (url.pathname === '/api/driver/profile') {
+      if (request.method !== 'GET') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+      await ensureDriversTable(env);
+      const auth = await requireDriverApiAuth(request, env, origin);
+      if (auth.response) return auth.response;
+      const driverRecord = await loadDriverRecordByEmail(env, auth.email);
+      if (!driverRecord) {
+        return jsonResponse({ ok: false, error: 'Driver not found' }, 404, origin);
+      }
+      const driverInfo = {
+        ok: true,
+        id: driverRecord.id,
+        name: `${driverRecord.first_name} ${driverRecord.last_name}`.trim(),
+        photo_url: driverRecord.photo_url,
+        language: driverRecord.language,
+        music: driverRecord.music
+      };
+      return jsonResponseNoCache(driverInfo, 200, origin);
+    }
     if (url.pathname === '/api/estimate') {
       if (request.method !== 'POST') {
         return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
@@ -7333,8 +8719,44 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       const hourlyRate = Number.parseFloat(payload?.hourly_rate);
       const mileageRateSuv = Number.parseFloat(payload?.mileage_rate_suv);
       const mileageRateSedan = Number.parseFloat(payload?.mileage_rate_sedan);
-      const serviceTypes = normalizeServiceTypes(payload?.service_types || '');
-      const defaultServiceType = String(payload?.default_service_type || serviceTypes[0] || DEFAULT_SERVICE_TYPE).trim();
+      const rawVehicleOptions = normalizeVehicleOptions(payload?.vehicle_options || payload?.service_types || '');
+      const vehicleOptions = await Promise.all(rawVehicleOptions.map(async (option) => {
+        if (option.image_url && option.image_url.startsWith('data:image')) {
+          try {
+            const matches = option.image_url.match(/^data:image\/([a-zA-Z0-9]+);base64,(.+)$/);
+            if (matches) {
+              const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+              const binaryString = atob(matches[2]);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i += 1) bytes[i] = binaryString.charCodeAt(i);
+              const kvKey = `assets/vehicles/${option.id}-${Date.now()}.${ext}`;
+              await env.VEHICLE_IMAGES.put(kvKey, bytes.buffer);
+              return { ...option, image_url: `${url.origin}/${kvKey}` };
+            }
+          } catch (imgErr) {
+            console.error('Error uploading vehicle image to KV:', imgErr);
+          }
+        }
+        return option;
+      }));
+      const serviceTypes = normalizeServiceTypes(vehicleOptions.map((option) => option.label));
+      const defaultServiceTypeRaw = String(payload?.default_service_type || '').trim();
+      const defaultServiceType = serviceTypes.includes(defaultServiceTypeRaw)
+        ? defaultServiceTypeRaw
+        : (serviceTypes[0] || DEFAULT_SERVICE_TYPE);
+      const airportPickupEnabled = normalizeSettingBoolean(payload?.airport_pickup_enabled, DEFAULT_AIRPORT_PICKUP_SETTINGS.enabled);
+      const airportPickupMeetGreetLabel = String(payload?.airport_pickup_meet_greet_label || DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetLabel).trim() || DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetLabel;
+      const airportPickupCurbsideLabel = String(payload?.airport_pickup_curbside_label || DEFAULT_AIRPORT_PICKUP_SETTINGS.curbsideLabel).trim() || DEFAULT_AIRPORT_PICKUP_SETTINGS.curbsideLabel;
+      const airportPickupMeetGreetFeeRaw = String(payload?.airport_pickup_meet_greet_fee_cents ?? `${DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetFeeCents}`).trim();
+      const airportPickupMeetGreetFeeCents = Math.max(
+        0,
+        Number.isFinite(Number.parseFloat(airportPickupMeetGreetFeeRaw))
+          ? (airportPickupMeetGreetFeeRaw.includes('.') ? Math.round(Number.parseFloat(airportPickupMeetGreetFeeRaw) * 100) : Math.round(Number.parseFloat(airportPickupMeetGreetFeeRaw)))
+          : DEFAULT_AIRPORT_PICKUP_SETTINGS.meetGreetFeeCents
+      );
+      const airportPickupDefaultMode = String(payload?.airport_pickup_default_mode || DEFAULT_AIRPORT_PICKUP_SETTINGS.defaultMode).trim().toLowerCase() === 'meet_greet'
+        ? 'meet_greet'
+        : 'curbside';
       const requestedRouteCount = Number.parseInt(payload?.route_count || `${DEFAULT_FEATURED_ROUTES.length}`, 10);
       const routeCount = Number.isFinite(requestedRouteCount) && requestedRouteCount > 0
         ? requestedRouteCount
@@ -7382,7 +8804,13 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
         ['mileage_rate_suv', mileageRateSuv.toFixed(2)],
         ['mileage_rate_sedan', mileageRateSedan.toFixed(2)],
         ['service_types', JSON.stringify(serviceTypes)],
+        ['vehicle_options', JSON.stringify(vehicleOptions)],
         ['default_service_type', defaultServiceType],
+        ['airport_pickup_enabled', String(airportPickupEnabled)],
+        ['airport_pickup_meet_greet_label', airportPickupMeetGreetLabel],
+        ['airport_pickup_curbside_label', airportPickupCurbsideLabel],
+        ['airport_pickup_meet_greet_fee_cents', String(airportPickupMeetGreetFeeCents)],
+        ['airport_pickup_default_mode', airportPickupDefaultMode],
         ['route_count', String(featuredRoutes.length)],
         ...featuredRoutes.flatMap((route) => [
           [`${route.key}_label`, route.label],
@@ -7390,6 +8818,7 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
           [`${route.key}_image_url`, route.image_url || '']
         ])
       ]);
+      await sendCustomerUpdateNotification(env).catch(() => {});
 
       if (request.method === 'GET') {
         return Response.redirect(new URL('/admin', request.url).toString(), 302);
@@ -7405,6 +8834,7 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
             mileage_rate_sedan: mileageRateSedan,
             service_mile_rates: pricing.serviceMileRates,
             service_types: serviceTypes,
+            vehicle_options: pricing.vehicleOptions,
             default_service_type: defaultServiceType,
             featured_routes: featuredRoutes,
             airport_terminal_options: pricing.airportTerminalOptions,
@@ -7446,30 +8876,6 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       }
 
       return jsonResponse({ ok: true, admin_emails: normalized }, 200, origin);
-    }
-
-    if (url.pathname === '/admin/driver-accounts') {
-      if (request.method !== 'POST' && request.method !== 'GET') {
-        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
-      }
-
-      let payload = Object.fromEntries(url.searchParams.entries());
-      if (request.method === 'POST') {
-        try {
-          payload = await request.json();
-        } catch (error) {
-          return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
-        }
-      }
-
-      const normalized = normalizeAdminEmails(payload?.driver_emails || '');
-      await setPricingSetting(env, 'driver_emails', normalized.join(','));
-
-      if (request.method === 'GET') {
-        return Response.redirect(new URL('/admin', request.url).toString(), 302);
-      }
-
-      return jsonResponse({ ok: true, driver_emails: normalized }, 200, origin);
     }
 
     if (url.pathname === '/admin/booking-price') {
@@ -7611,6 +9017,99 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       return jsonResponse({ ok: true, customer: profile }, 200, origin);
     }
 
+    if (url.pathname === '/api/driver/registration-requests') {
+      if (request.method !== 'POST') {
+        return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
+      }
+
+      let payload;
+      try {
+        payload = await request.json();
+      } catch (error) {
+        return jsonResponse({ ok: false, error: 'Invalid JSON' }, 400, origin);
+      }
+
+      const firstName = String(payload?.first_name || '').trim();
+      const lastName = String(payload?.last_name || '').trim();
+      const email = String(payload?.email || '').trim().toLowerCase();
+      const password = String(payload?.password || '').trim();
+      const carModel = String(payload?.car_model || '').trim();
+      const profilePhotoUrl = String(payload?.profile_photo || '').trim();
+      const carImages = parseJsonStringArray(payload?.car_images || []).filter(Boolean);
+      const normalizedImages = [profilePhotoUrl, ...carImages].filter(Boolean);
+
+      if (!firstName || !lastName || !email || !password || !carModel) {
+        return jsonResponse({ ok: false, error: 'Fill in all registration fields' }, 400, origin);
+      }
+      if (!normalizedImages.length) {
+        return jsonResponse({ ok: false, error: 'Add a profile photo' }, 400, origin);
+      }
+      if (!email.includes('@')) {
+        return jsonResponse({ ok: false, error: 'Enter a valid email address' }, 400, origin);
+      }
+
+      await ensureDriverRegistrationTables(env);
+      const now = new Date().toISOString();
+      const requestRow = {
+        first_name: firstName,
+        last_name: lastName,
+        email,
+        password,
+        car_model: carModel,
+        profile_photo_url: profilePhotoUrl || normalizedImages[0] || '',
+        car_images_json: JSON.stringify(normalizedImages),
+        status: 'pending',
+        review_notes: '',
+        reviewed_at: null,
+        created_at: now,
+        updated_at: now
+      };
+
+      const inserted = await env.DB.prepare(
+        `INSERT INTO driver_registration_requests (
+          first_name,
+          last_name,
+          email,
+          password,
+          car_model,
+          profile_photo_url,
+          car_images_json,
+          status,
+          review_notes,
+          reviewed_at,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          requestRow.first_name,
+          requestRow.last_name,
+          requestRow.email,
+          requestRow.password,
+          requestRow.car_model,
+          requestRow.profile_photo_url,
+          requestRow.car_images_json,
+          requestRow.status,
+          requestRow.review_notes,
+          requestRow.reviewed_at,
+          requestRow.created_at,
+          requestRow.updated_at
+        )
+        .run();
+      const requestId = Number(inserted?.meta?.last_row_id || 0);
+      return jsonResponse(
+        {
+          ok: true,
+          request: serializeDriverRegistrationRequest({
+            id: requestId,
+            ...requestRow
+          })
+        },
+        200,
+        origin
+      );
+    }
+
     if (url.pathname === '/admin/approve') {
       if (request.method !== 'POST' && request.method !== 'GET') {
         return jsonResponse({ ok: false, error: 'Method not allowed' }, 405, origin);
@@ -7642,7 +9141,7 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
         return jsonResponse({ ok: false, error: 'Booking not found' }, 404, origin);
       }
 
-      const result = await approveBookingAndEmail(env, booking);
+      const result = await approveBookingAndEmail(env, booking, ctx);
       if (!result.ok) {
         return jsonResponse({ ok: false, error: result.error }, 500, origin);
       }
@@ -7736,10 +9235,16 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       kids,
       bags,
       contact_number,
+      flight_number,
       airline,
+      flight_gate,
+      flight_terminal,
       terminal,
       promo_code,
       gratuity_percent,
+      selected_driver_id,
+      airport_pickup_mode,
+      preferred_language,
       turnstile_token
     } = payload || {};
 
@@ -7764,7 +9269,7 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       }
     }
 
-    if (!authenticatedCustomer && !isGuestToken && !isNativeAppClient) {
+    if (!authenticatedCustomer && !isGuestToken && !isNativeAppClient && url.pathname !== '/api/customer/verify-phone') {
       const turnstileVerification = await verifyTurnstileToken(
         env,
         turnstile_token,
@@ -7791,8 +9296,16 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
     }
 
     const mode = booking_mode === 'hourly' ? 'hourly' : 'transfer';
-    const bookingAirline = String(airline || payload?.airline_name || '').trim().slice(0, 120);
-    const bookingTerminal = String(terminal || payload?.airport_terminal || '').trim().slice(0, 80);
+    const bookingFlightNumber = String(flight_number || payload?.flight_number || '').trim().slice(0, 80);
+    const bookingAirline = String(airline || payload?.airline || payload?.airline_name || '').trim().slice(0, 120);
+    const bookingFlightGate = String(flight_gate || payload?.flight_gate || '').trim().slice(0, 80);
+    const bookingFlightTerminal = String(flight_terminal || terminal || payload?.flight_terminal || payload?.airport_terminal || '').trim().slice(0, 80);
+    const selectedAirportPickupMode = String(airport_pickup_mode || payload?.airport_pickup_mode || '').trim().toLowerCase() === 'meet_greet'
+      ? 'meet_greet'
+      : 'curbside';
+    const selectedPreferredLanguage = normalizePreferredLanguage(preferred_language || payload?.preferred_language || '');
+    const bookingDriverId = Number.parseInt(String(selected_driver_id || ''), 10);
+    const normalizedDriverId = Number.isFinite(bookingDriverId) && bookingDriverId > 0 ? bookingDriverId : null;
     const pricing = await getPricingSettings(env);
     const normalizedServiceType = pricing.serviceTypes.includes(String(service_type || '').trim())
       ? String(service_type || '').trim()
@@ -7816,13 +9329,17 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
           pricing.serviceMileRates
         )
       : null;
+    const airportPickupFeeCents = pricing.airportPickupEnabled && selectedAirportPickupMode === 'meet_greet'
+      ? pricing.airportPickupMeetGreetFeeCents
+      : 0;
+    const preferredLanguageFeeCents = selectedPreferredLanguage ? 3000 : 0;
 
     if (!totalCents || totalCents <= 0) {
       return jsonResponse({ ok: false, error: 'Invalid route estimate' }, 400, origin);
     }
 
     const bookingAddOns = calculateBookingAddOns({ kids, bags });
-    const originalTotalCents = totalCents + bookingAddOns.totalCents;
+    const originalTotalCents = totalCents + bookingAddOns.totalCents + airportPickupFeeCents + preferredLanguageFeeCents;
     const destinationPromoText = [dropoff_location, parseStopsText(stops)].filter(Boolean).join(' ');
     const promo = calculatePromoDiscountCents({
       promoCode: promo_code,
@@ -7843,7 +9360,7 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
     });
     const appliedDiscount = automaticPromo.discountCents >= promo.discountCents ? automaticPromo : promo;
     const discountCents = appliedDiscount.discountCents;
-    const discountedTotalCents = Math.max(0, totalCents - discountCents) + bookingAddOns.totalCents;
+    const discountedTotalCents = Math.max(0, totalCents - discountCents) + bookingAddOns.totalCents + airportPickupFeeCents + preferredLanguageFeeCents;
     const discountedFareCents = Math.max(0, totalCents - discountCents);
     const gratuity = calculateGratuityCents({
       subtotalCents: discountedFareCents,
@@ -7895,10 +9412,16 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
           kids,
           bags,
           contact_number,
+          driver_id,
+          airport_pickup_mode,
+          airport_pickup_fee_cents,
+          preferred_language,
+          flight_number,
           airline,
-          terminal,
+          flight_gate,
+          flight_terminal,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           full_name,
@@ -7927,8 +9450,14 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
           kids || '',
           bags || '',
           contact_number || '',
+          normalizedDriverId,
+          selectedAirportPickupMode,
+          airportPickupFeeCents,
+          selectedPreferredLanguage || '',
+          bookingFlightNumber,
           bookingAirline,
-          bookingTerminal,
+          bookingFlightGate,
+          bookingFlightTerminal,
           createdAt
         )
         .run();
@@ -7944,6 +9473,38 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       const checkoutUrl = '';
       const paymentStatus = 'pending_review';
       const stripeSessionId = '';
+      const submittedBooking = {
+        id: insertResult?.meta?.last_row_id || '',
+        full_name: full_name || '',
+        customer_email: resolvedCustomerEmail,
+        customer_user_id: resolvedCustomerUserId,
+        contact_number: contact_number || '',
+        pickup_date,
+        pickup_time: pickup_time || '',
+        pickup_location,
+        dropoff_location,
+        stops: stops ? JSON.stringify(stops) : '',
+        booking_mode: mode,
+        service_type: normalizedServiceType,
+        estimated_hours: String(estimatedHours?.toFixed(2) || ''),
+        estimated_total_cents: finalTotalCents,
+        promo_code: appliedDiscount.discountCents > 0 ? appliedDiscount.promoCode : '',
+        promo_discount_cents: discountCents,
+        original_total_cents: originalTotalCents,
+        gratuity_percent: gratuity.gratuityPercent,
+        gratuity_cents: gratuity.gratuityCents,
+        travelers: travelers || '',
+        kids: kids || '',
+        bags: bags || '',
+        airport_pickup_mode: selectedAirportPickupMode,
+        airport_pickup_fee_cents: airportPickupFeeCents,
+        airline: bookingAirline,
+        terminal: bookingFlightTerminal,
+        child_seat_price_cents: bookingAddOns.childSeatPriceCents,
+        luggage_price_cents: bookingAddOns.luggagePriceCents,
+        payment_status: paymentStatus,
+        created_at: createdAt
+      };
 
       const stopsText = parseStopsText(stops);
       const slackMessage = [
@@ -7962,13 +9523,16 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
           ? `Promo: ${appliedDiscount.promoCode} (-$${(appliedDiscount.discountCents / 100).toFixed(2)})`
           : promo.promoCode ? `Promo: ${promo.promoCode} (not applied)` : null,
         `Add-ons: $${(bookingAddOns.totalCents / 100).toFixed(2)}`,
+        `Meet-And-Greet: ${selectedAirportPickupMode === 'meet_greet' ? 'Yes' : 'No'}`,
+        airportPickupFeeCents > 0 ? `Meet-And-Greet fee: ${formatCurrency(airportPickupFeeCents)}` : null,
         `Driver gratuity: ${gratuity.gratuityPercent}% ($${(gratuity.gratuityCents / 100).toFixed(2)})`,
         `Total: $${(finalTotalCents / 100).toFixed(2)}`,
         `Travelers: ${travelers || '—'}`,
         `Child seats: ${kids || '—'} (${formatCurrency(bookingAddOns.childSeatPriceCents)})`,
         `Luggage: ${bags || '—'} (${formatCurrency(bookingAddOns.luggagePriceCents)})`,
+        `Preferred Language Chauffeur: ${selectedPreferredLanguage || 'No Preference'}`,
         bookingAirline ? `Airline: ${bookingAirline}` : null,
-        bookingTerminal ? `Terminal: ${bookingTerminal}` : null,
+        bookingFlightTerminal ? `Terminal: ${bookingFlightTerminal}` : null,
         `Contact: ${contact_number || '—'}`
       ]
         .filter(Boolean)
@@ -7977,35 +9541,16 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
       await sendSlack(env, slackMessage);
       if (ctx) {
         ctx.waitUntil(
-          sendBookingMadeAdminEmail(env, {
-            id: insertResult?.meta?.last_row_id || '',
-            full_name: full_name || '',
-            customer_email: resolvedCustomerEmail,
-            customer_user_id: resolvedCustomerUserId,
-            contact_number: contact_number || '',
-            pickup_date,
-            pickup_time: pickup_time || '',
-            pickup_location,
-            dropoff_location,
-            stops: stops ? JSON.stringify(stops) : '',
-            booking_mode: mode,
-            service_type: normalizedServiceType,
-            estimated_hours: String(estimatedHours?.toFixed(2) || ''),
-            estimated_total_cents: finalTotalCents,
-            promo_code: appliedDiscount.discountCents > 0 ? appliedDiscount.promoCode : '',
-            promo_discount_cents: discountCents,
-            original_total_cents: originalTotalCents,
-            gratuity_percent: gratuity.gratuityPercent,
-            gratuity_cents: gratuity.gratuityCents,
-            travelers: travelers || '',
-            kids: kids || '',
-            bags: bags || '',
-            airline: bookingAirline,
-            terminal: bookingTerminal,
-            child_seat_price_cents: bookingAddOns.childSeatPriceCents,
-            luggage_price_cents: bookingAddOns.luggagePriceCents,
-            payment_status: paymentStatus,
-            created_at: createdAt
+          sendBookingMadeAdminEmail(env, submittedBooking)
+        );
+        ctx.waitUntil(
+          sendBookingSubmittedCustomerEmail(env, submittedBooking).catch((error) => {
+            console.warn('[Email] Submitted booking customer email failed:', error?.message || error);
+          })
+        );
+        ctx.waitUntil(
+          sendSubmittedBookingSms(env, submittedBooking).catch((error) => {
+            console.warn('[SMS] Submitted booking SMS failed:', error?.message || error);
           })
         );
       }
@@ -8030,11 +9575,15 @@ return jsonResponse({ ok: true, message: 'Verification code sent to your phone.'
         origin
       );
     } catch (error) {
-      return jsonResponse({ ok: false, error: 'Database error' }, 500, origin);
+      console.error('[DB Error]', error);
+      return jsonResponse({ ok: false, error: `Database error: ${error?.message || error}` }, 500, origin);
     }
   },
 
   async scheduled(_event, env, ctx) {
-    ctx.waitUntil(sendDueBookingReminders(env));
+    ctx.waitUntil((async () => {
+      await syncApprovedDrivers(env);
+      await sendDueBookingReminders(env);
+    })());
   }
 };

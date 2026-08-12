@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS bookings (
   paid_at TEXT,
   paid_notification_sent_at TEXT,
   payment_receipt_sent_at TEXT,
+  submitted_sms_sent_at TEXT,
   approval_sms_sent_at TEXT,
   paid_sms_sent_at TEXT,
   reminder_sms_sent_at TEXT,
@@ -33,6 +34,16 @@ CREATE TABLE IF NOT EXISTS bookings (
   kids TEXT,
   bags TEXT,
   contact_number TEXT,
+  airport_pickup_mode TEXT DEFAULT '',
+  airport_pickup_fee_cents INTEGER DEFAULT 0,
+  preferred_language TEXT DEFAULT '',
+  airline TEXT DEFAULT '',
+  flight_number TEXT DEFAULT '',
+  flight_gate TEXT DEFAULT '',
+  flight_terminal TEXT DEFAULT '',
+  driver_id INTEGER,
+  driver_name TEXT,
+  driver_photo_url TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -83,6 +94,25 @@ CREATE TABLE IF NOT EXISTS admin_device_tokens (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS driver_registration_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  first_name TEXT NOT NULL,
+  last_name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  password TEXT NOT NULL,
+  car_model TEXT NOT NULL,
+  profile_photo_url TEXT,
+  car_images_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'pending',
+  review_notes TEXT DEFAULT '',
+  reviewed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_driver_registration_requests_status
+ON driver_registration_requests(status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS booking_reminders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   booking_id INTEGER NOT NULL,
@@ -118,3 +148,15 @@ CREATE TABLE IF NOT EXISTS inbound_emails (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_inbound_emails_resend_email_id
 ON inbound_emails(resend_email_id);
+
+CREATE TABLE IF NOT EXISTS drivers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  first_name TEXT NOT NULL,
+  last_name TEXT NOT NULL,
+  email TEXT,
+  photo_url TEXT,
+  language TEXT,
+  music TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);

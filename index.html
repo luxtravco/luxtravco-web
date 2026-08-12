@@ -4,7 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Luxtravco | Luxury Travel Company</title>
-  <link rel="icon" type="image/png" href="logo.png" />
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
   <link rel="stylesheet" href="styles.css" />
   <script src="supabase-client.js"></script>
   <script>
@@ -54,13 +55,13 @@
             <strong>App Store</strong>
           </span>
         </a>
-        <span class="store-badge">
+        <a class="store-badge" href="https://play.google.com/store/apps/details?id=com.luxtravco.app&hl=en_US" target="_blank" rel="noopener">
           <img class="store-icon-img" src="https://upload.wikimedia.org/wikipedia/commons/d/d0/Google_Play_Arrow_logo.svg" alt="" aria-hidden="true" />
           <span>
             <small>Get it on</small>
             <strong>Google Play</strong>
           </span>
-        </span>
+        </a>
       </div>
     </div>
   </header>
@@ -69,7 +70,7 @@
     <section class="hero reveal">
       <div class="hero-content">
         <span class="eyebrow">Luxury Chauffeured Travel</span>
-        <h1>Arrive in a black Suburban with a professional chauffeur.</h1>
+        <h1>Arrive in a Cadillac Escalade with a professional chauffeur.</h1>
         <p class="lede">
           Luxtravco delivers a discreet, white‑glove experience for one-way rides,
           corporate travel, and special events. Reserve direct routes or round trips in minutes.
@@ -79,8 +80,8 @@
           <a class="secondary-btn" href="#services">Explore Services</a>
         </div>
         <div class="hero-pills">
-          <span class="hero-pill">Black luxury sedan</span>
-          <span class="hero-pill">Worldwide transfers</span>
+          <span class="hero-pill">Cadillac Escalade</span>
+          <span class="hero-pill">Executive SUV service</span>
         </div>
         <div class="hero-metrics">
           <div>
@@ -130,15 +131,15 @@
 
     <section id="fleet" class="section reveal fleet-showcase">
       <div class="section-header">
-        <h2>Chevy Suburban‑Only Fleet</h2>
-        <p>One flagship SUV. Discreet, spacious, and executive‑grade.</p>
+        <h2>Cadillac Escalade‑First Fleet</h2>
+        <p>Our flagship SUV is the Escalade: spacious, quiet, and built for executive travel.</p>
       </div>
       <div class="fleet-grid">
         <article class="fleet-card suburban-card float slow">
-          <img src="suburban-main.jpg" alt="2023 Chevy Suburban Premier" />
+          <img src="assets/black-suv.png" alt="Cadillac Escalade in black" />
           <div>
-            <h3>Suburban Premier</h3>
-            <p>Smooth ride, full‑size comfort, and a premier black‑SUV profile.</p>
+            <h3>Cadillac Escalade</h3>
+            <p>Smooth ride, full‑size comfort, and a premium black‑SUV profile.</p>
             <ul>
               <li>7 passenger seating</li>
               <li>Rear climate zones</li>
@@ -149,10 +150,10 @@
           </div>
         </article>
         <article class="fleet-card float">
-          <img src="interior-black.jpg" alt="Jet black interior" class="no-filter" />
+          <img src="interior-black.jpg" alt="Cadillac Escalade interior" class="no-filter" />
           <div>
-            <h3>Jet Black Interior</h3>
-            <p>Jet‑black cabin with clean lines and a calm, private atmosphere.</p>
+            <h3>Escalade Interior</h3>
+            <p>Black cabin with clean lines and a calm, private atmosphere.</p>
             <ul>
               <li>All‑black seating</li>
               <li>Dark dash and panels</li>
@@ -167,13 +168,13 @@
       <div class="experience-text">
         <h2>Luxury feel, chauffeured ease.</h2>
         <p>
-          Built for guests who want a discreet, professional chauffeur in a premium SUV.
+          Built for guests who want a discreet, professional chauffeur in a flagship Escalade.
           We handle the details so you can focus on the destination.
         </p>
         <div class="experience-points">
           <div>
             <h4>Premium Presentation</h4>
-            <p>Arrive in a black Suburban that looks and feels executive‑grade.</p>
+            <p>Arrive in a black Cadillac Escalade that looks and feels executive‑grade.</p>
           </div>
           <div>
             <h4>Chauffeur‑Led Service</h4>
@@ -184,7 +185,7 @@
       <div class="experience-panel">
         <h3>Client feedback</h3>
         <blockquote>
-          “The Suburban felt high‑end from curb to curb. Seamless experience.”
+          “The Escalade felt high‑end from curb to curb. Seamless experience.”
           <span>— Marco T., Client</span>
         </blockquote>
         <blockquote>
@@ -206,7 +207,7 @@
           <span class="price" data-price-hourly>$79 / hour</span>
           <ul>
             <li>Ideal for meetings & events</li>
-            <li>Chauffeured Suburban included</li>
+            <li>Chauffeured Cadillac Escalade included</li>
             <small class="fine-print">*Up To 10 mile radius</small>
           </ul>
           <a
@@ -390,6 +391,45 @@
                   </div>
                 </div>
               </fieldset>
+              <fieldset class="addon-field airport-pickup-fieldset" data-airport-pickup-fieldset>
+                <legend>
+                  <span data-airport-pickup-label>Meet &amp; Greet</span>
+                  <strong data-airport-pickup-fee>$0.00</strong>
+                </legend>
+                <div class="child-seat-toggle airport-pickup-toggle">
+                  <label>
+                    <input type="radio" name="airportPickupMode" value="curbside" checked />
+                    <span>No</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="airportPickupMode" value="meet_greet" />
+                    <span>Yes</span>
+                  </label>
+                </div>
+                <p class="airport-pickup-note">
+                  Available for airport pickups and dropoffs when you want meet-and-greet service.
+                </p>
+                <div class="airport-flight-info" data-airport-flight-info hidden>
+                  <label>
+                    Flight Number
+                    <input type="text" name="flightNumber" placeholder="AA 1234" />
+                  </label>
+                  <div class="field-row">
+                    <label>
+                      Airline
+                      <input type="text" name="airline" placeholder="American Airlines" />
+                    </label>
+                    <label>
+                      Gate
+                      <input type="text" name="flightGate" placeholder="B12" />
+                    </label>
+                  </div>
+                  <label>
+                    Terminal
+                    <input type="text" name="flightTerminal" placeholder="Terminal 4" />
+                  </label>
+                </div>
+              </fieldset>
               <label>
                 Contact Number
                 <input type="text" placeholder="+1 (312) 555-0198" name="contactNumber" />
@@ -436,6 +476,18 @@
                 <button class="primary-btn" type="button" data-action="email-form">
                   Submit Request
                 </button>
+              </div>
+              <div class="payment-badges">
+                <span class="payment-badges__label">We Accept</span>
+                <div class="payment-badges__icons">
+                  <img class="pay-badge" src="assets/payment-icons/visa.svg" alt="Visa" title="Visa" />
+                  <img class="pay-badge" src="assets/payment-icons/mastercard.svg" alt="Mastercard" title="Mastercard" />
+                  <img class="pay-badge" src="assets/payment-icons/amex.svg" alt="American Express" title="American Express" />
+                  <img class="pay-badge" src="assets/payment-icons/apple-pay.svg" alt="Apple Pay" title="Apple Pay" />
+                  <img class="pay-badge" src="assets/payment-icons/google-pay.svg" alt="Google Pay" title="Google Pay" />
+                  <img class="pay-badge" src="assets/payment-icons/samsung-pay.svg" alt="Samsung Pay" title="Samsung Pay" />
+                  <img class="pay-badge" src="assets/payment-icons/unionpay.svg" alt="UnionPay" title="UnionPay" />
+                </div>
               </div>
             </form>
           </div>
