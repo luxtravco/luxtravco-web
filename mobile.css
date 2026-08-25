@@ -78,6 +78,26 @@ a {
   color: #fffaf0;
 }
 
+.toll-free-number span {
+  display: block;
+}
+
+.toll-free-number span + span {
+  margin-top: 4px;
+}
+
+.support-number {
+  color: #fffaf0;
+}
+
+.support-number span {
+  display: block;
+}
+
+.support-number span + span {
+  margin-top: 4px;
+}
+
 .app-brand {
   display: flex;
   align-items: center;

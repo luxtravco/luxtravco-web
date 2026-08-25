@@ -142,6 +142,26 @@ h1, h2, h3, h4 {
   color: #fffaf0;
 }
 
+.toll-free-number strong {
+  display: block;
+}
+
+.toll-free-number strong + strong {
+  margin-top: 4px;
+}
+
+.support-number {
+  color: #fffaf0;
+}
+
+.support-number strong {
+  display: block;
+}
+
+.support-number strong + strong {
+  margin-top: 4px;
+}
+
 .app-brand {
   display: flex;
   align-items: center;
