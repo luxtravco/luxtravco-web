@@ -70,15 +70,29 @@ a {
   display: block;
 }
 
+.app-brand-phone span {
+  color: #f0b247;
+}
+
+.app-brand-phone strong {
+  color: #fffaf0;
+}
+
 .app-brand-phone strong {
   margin-top: 4px;
 }
 
 .toll-free-number {
   color: #fffaf0;
+  text-decoration: none;
 }
 
 .toll-free-number span {
+  display: block;
+}
+
+.toll-free-number strong,
+.support-number strong {
   display: block;
 }
 
@@ -86,12 +100,25 @@ a {
   margin-top: 4px;
 }
 
-.support-number {
+.toll-free-number strong:nth-child(odd) {
+  color: #f0b247;
+}
+
+.toll-free-number strong:nth-child(even) {
   color: #fffaf0;
+}
+
+.support-number {
+  color: #f0b247;
+  text-decoration: none;
 }
 
 .support-number span {
   display: block;
+}
+
+.support-number strong + strong {
+  margin-top: 4px;
 }
 
 .support-number span + span {

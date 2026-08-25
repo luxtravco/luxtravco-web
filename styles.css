@@ -130,6 +130,14 @@ h1, h2, h3, h4 {
   display: block;
 }
 
+.app-brand-phone span {
+  color: #f0b247;
+}
+
+.app-brand-phone strong {
+  color: #fffaf0;
+}
+
 .app-brand-phone strong {
   margin-top: 4px;
 }
@@ -140,6 +148,7 @@ h1, h2, h3, h4 {
 
 .toll-free-number {
   color: #fffaf0;
+  text-decoration: none;
 }
 
 .toll-free-number strong {
@@ -150,8 +159,17 @@ h1, h2, h3, h4 {
   margin-top: 4px;
 }
 
-.support-number {
+.toll-free-number strong:nth-child(odd) {
+  color: #f0b247;
+}
+
+.toll-free-number strong:nth-child(even) {
   color: #fffaf0;
+}
+
+.support-number {
+  color: #f0b247;
+  text-decoration: none;
 }
 
 .support-number strong {
