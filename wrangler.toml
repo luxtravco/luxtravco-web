@@ -8,9 +8,6 @@ preview_urls = false
 # Environment variables used by the Worker.
 # Do **not** commit real secret values – they should be added with `wrangler secret put <NAME>` after this file is updated.
 # ----------------------------------------------------------------------
-[vars]
-
-
 [[d1_databases]]
 binding = "DB"
 database_name = "luxtravco_bookings"

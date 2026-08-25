@@ -3,189 +3,104 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SMS Opt-In Policy & Terms | Luxtravco</title>
-  <link rel="icon" type="image/png" href="favicon.png" />
-  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
-  <link rel="stylesheet" href="styles.css" />
+  <title>SMS Opt-In Policy &amp; Terms | Luxtravco</title>
   <style>
-    .policy-container {
-      max-width: 800px;
-      margin: 120px auto 60px;
-      padding: 40px;
-      background: linear-gradient(135deg, #181512 0%, #0d0c0b 58%, #20180c 100%);
+    :root {
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #080807;
+      color: #f7f2e8;
+      font-family: Arial, Helvetica, sans-serif;
+      line-height: 1.65;
+    }
+
+    main {
+      width: min(820px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 48px 0 72px;
+    }
+
+    .card {
+      background: #11100f;
       border: 1px solid #2b2419;
       border-radius: 22px;
-      box-shadow: 0 22px 60px rgba(0, 0, 0, 0.38);
+      padding: clamp(24px, 5vw, 52px);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
     }
-    .policy-header {
-      border-bottom: 1px solid #2b2419;
-      padding-bottom: 24px;
-      margin-bottom: 30px;
-    }
-    .policy-header h1 {
-      color: #fff7e8;
-      font-size: 32px;
-      margin: 10px 0 0;
-      font-weight: 700;
-    }
-    .policy-header .eyebrow {
+
+    .eyebrow {
       color: #f0b247;
-      font-size: 11px;
-      letter-spacing: 2.4px;
+      font-size: 12px;
       font-weight: 700;
+      letter-spacing: 2px;
       text-transform: uppercase;
-      border: 1px solid rgba(240, 178, 71, 0.42);
-      padding: 4px 10px;
-      border-radius: 999px;
-      display: inline-block;
     }
-    .policy-content p {
-      color: #d8cdbb;
-      font-size: 15px;
-      line-height: 1.65;
-      margin: 0 0 20px;
+
+    h1 {
+      margin: 12px 0 12px;
+      font-size: clamp(32px, 6vw, 52px);
+      line-height: 1.08;
     }
-    .policy-content h2 {
-      color: #fff7e8;
-      font-size: 20px;
-      margin: 30px 0 15px;
-      font-weight: 600;
-    }
-    .policy-content ul {
-      color: #d8cdbb;
-      font-size: 15px;
-      line-height: 1.65;
-      margin: 0 0 20px 20px;
-      padding: 0;
-    }
-    .policy-content li {
-      margin-bottom: 8px;
-    }
-    .back-link {
-      display: inline-flex;
-      align-items: center;
+
+    h2 {
       color: #f0b247;
+      font-size: 18px;
+      margin: 34px 0 8px;
+    }
+
+    p,
+    li {
+      color: #d8cdbb;
+    }
+
+    ul {
+      padding-left: 22px;
+    }
+
+    a {
+      color: #f0b247;
+    }
+
+    .back {
+      display: inline-block;
+      margin-top: 32px;
+      font-weight: 700;
       text-decoration: none;
-      font-size: 14px;
-      font-weight: 600;
-      margin-bottom: 20px;
-      transition: color 0.2s ease;
-    }
-    .back-link:hover {
-      color: #fff7e8;
-    }
-    .back-link svg {
-      margin-right: 8px;
     }
   </style>
 </head>
 <body>
-  <div class="noise"></div>
-  <div class="halo"></div>
+  <main>
+    <article class="card">
+      <div class="eyebrow">SMS Terms</div>
+      <h1>SMS Opt-In Policy &amp; Terms</h1>
+      <p>Luxtravco offers transactional text-message updates to keep customers informed about booking inquiries, reservation status, payment requests, receipts, chauffeur assignments, and account security.</p>
 
-  <header class="app-promo-header">
-    <div class="app-promo-inner">
-      <div class="app-brand" style="cursor: pointer;" onclick="window.location.href='/'">
-        <img src="logo.png" alt="Luxtravco logo" class="app-brand-logo" />
-        <div class="app-brand-copy">
-          <strong>Luxtravco</strong>
-          <span>Luxury Travel Company</span>
-        </div>
-      </div>
-      <div class="store-badges" aria-label="Download the Luxtravco app">
-        <a class="store-badge" href="https://apps.apple.com/us/app/luxtravco/id6767897796" target="_blank" rel="noopener">
-          <img class="store-icon-img" src="https://upload.wikimedia.org/wikipedia/commons/6/67/App_Store_%28iOS%29.svg" alt="" aria-hidden="true" />
-          <span>
-            <small>Download on the</small>
-            <strong>App Store</strong>
-          </span>
-        </a>
-      </div>
-    </div>
-  </header>
+      <h2>1. Consent and Opt-In</h2>
+      <p>By providing your phone number and checking the SMS agreement box, you expressly consent to receive automated text messages from Luxtravco about your bookings and account. Consent is not a condition of purchase.</p>
 
-  <main style="padding: 0 20px;">
-    <div class="policy-container">
-      <a href="/" class="back-link">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
-        Back to Home
-      </a>
-      
-      <div class="policy-header">
-        <span class="eyebrow">SMS Terms</span>
-        <h1>SMS Opt-In Policy &amp; Terms</h1>
-      </div>
+      <h2>2. Message Types and Frequency</h2>
+      <p>Messages may include request-received updates, payment links, payment confirmations, ride reminders, chauffeur updates, and verification codes. Message frequency varies based on your booking activity.</p>
 
-      <div class="policy-content">
-        <p>
-          Luxtravco ("we," "us," or "our") offers transactional SMS message updates to keep our customers informed about their booking inquiries, confirmation details, reservation status, receipts, and professional chauffeur assignments. Please review the terms below to understand how our SMS program operates.
-        </p>
+      <h2>3. Message and Data Rates</h2>
+      <p>Message and data rates may apply according to your mobile carrier plan.</p>
 
-        <h2>1. Consent and Opt-In</h2>
-        <p>
-          By providing your phone number on our website's reservation request form, via our mobile application, or by initiating a message to our number, you explicitly consent to receive automated text messages from Luxtravco regarding your bookings and account security.
-        </p>
-        <p>
-          Consent is collected when you enter your contact number on the reservation request form, verification screens, or customer forms and check the agreement box. Opt-in consent is unique to you and is not shared with or transferred to any third party.
-        </p>
+      <h2>4. Opting Out and Help</h2>
+      <p>You may stop SMS messages at any time by replying <strong>STOP</strong>, <strong>QUIT</strong>, <strong>UNSUBSCRIBE</strong>, or <strong>CANCEL</strong>. Reply <strong>HELP</strong> for assistance. To opt in again, reply <strong>START</strong>, <strong>YES</strong>, <strong>RESUME</strong>, or <strong>SUBSCRIBE</strong>.</p>
 
-        <h2>2. Program Description</h2>
-        <p>
-          Luxtravco SMS notifications include:
-        </p>
-        <ul>
-          <li>Booking inquiry updates and confirmations.</li>
-          <li>Payment links and receipts.</li>
-          <li>Trip status updates (e.g., driver on the way, arrival notifications).</li>
-          <li>Verification codes to verify your phone number and secure your account.</li>
-          <li>Customer support communication related directly to your requested rides.</li>
-        </ul>
+      <h2>5. Privacy</h2>
+      <p>Luxtravco does not share, sell, rent, or lease customer phone numbers or SMS consent details to third parties for marketing or promotional purposes.</p>
 
-        <h2>3. Message Frequency and Pricing</h2>
-        <p>
-          Message frequency varies based on your active bookings and interaction levels with our team. Standard message and data rates may apply depending on your mobile carrier plan.
-        </p>
-
-        <h2>4. Opt-Out (Unsubscribe)</h2>
-        <p>
-          You can cancel the SMS service at any time. Simply text <strong>STOP</strong>, <strong>QUIT</strong>, <strong>UNSUBSCRIBE</strong>, or <strong>CANCEL</strong> to our number. 
-        </p>
-        <p>
-          After you send the message <strong>STOP</strong>, we will update your customer profile immediately to opt you out. We will send you one reply message to confirm that you have been unsubscribed, and after that, you will no longer receive SMS messages from us unless you opt back in.
-        </p>
-
-        <h2>5. Resubscribe (Opt-In again)</h2>
-        <p>
-          If you want to start receiving messages again, reply <strong>START</strong>, <strong>YES</strong>, <strong>RESUME</strong>, or <strong>SUBSCRIBE</strong> to our number, and we will reactivate SMS messaging for your profile.
-        </p>
-
-        <h2>6. Help and Customer Support</h2>
-        <p>
-          If you are experiencing issues with the messaging program or need assistance, reply <strong>HELP</strong> to our number, or contact our support team directly at <a href="mailto:info@luxtravco.com" style="color: #f0b247; text-decoration: none;">info@luxtravco.com</a> or call (909) 235‑0670.
-        </p>
-
-        <h2>7. Privacy Policy &amp; Data Security</h2>
-        <p>
-          We value your privacy. Consumer phone numbers and consent details collected for the purpose of SMS messaging will <strong>never</strong> be shared, sold, rented, or leased to third parties for marketing or promotional purposes. Your information is kept strictly confidential and used solely to fulfill your transportation requests.
-        </p>
-
-        <h2>8. Carrier Disclaimer</h2>
-        <p>
-          Mobile carriers are not liable for delayed or undelivered messages.
-        </p>
-      </div>
-    </div>
+      <p>For assistance, contact <a href="mailto:info@luxtravco.com">info@luxtravco.com</a>.</p>
+      <a class="back" href="/">Back to Luxtravco</a>
+    </article>
   </main>
-
-  <footer class="site-footer">
-    <div>
-      <strong>Luxtravco</strong>
-      <span>LAX Black Limousine Style</span>
-    </div>
-    <div>
-      <span>Licensed & Insured • Driver‑First Operations</span>
-      <span>© 2026 Luxtravco. All rights reserved.</span>
-    </div>
-  </footer>
 </body>
 </html>

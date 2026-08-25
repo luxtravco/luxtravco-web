@@ -284,6 +284,24 @@ const sendLuxSms = async (env, { to, body, booking, eventType = 'transactional' 
   }
 };
 
+const escapeXml = (value) =>
+  String(value ?? '').replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      case "'":
+        return '&apos;';
+      default:
+        return char;
+    }
+  });
+
 const luxEmailShell = ({ eyebrow = 'LUXTRAVCO', title, intro = '', body = '', ctaLabel = '', ctaUrl = '' }) => `
   <div style="margin:0;padding:0;background:#080807;color:#f7f2e8;font-family:Arial,Helvetica,sans-serif;">
     <div style="display:none;max-height:0;overflow:hidden;color:transparent;opacity:0;">
