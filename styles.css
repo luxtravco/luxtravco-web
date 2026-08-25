@@ -117,7 +117,7 @@ h1, h2, h3, h4 {
 .app-brand-phone {
   display: block;
   flex: 0 0 auto;
-  color: #f0b247;
+  color: #fffaf0;
   font-size: clamp(0.9rem, 1.45vw, 1.18rem);
   letter-spacing: 0.04em;
   font-weight: 800;
@@ -136,6 +136,10 @@ h1, h2, h3, h4 {
 
 .app-brand-phone:hover {
   text-decoration: underline;
+}
+
+.toll-free-number {
+  color: #fffaf0;
 }
 
 .app-brand {
