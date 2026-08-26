@@ -117,12 +117,12 @@ h1, h2, h3, h4 {
 .app-brand-phone {
   display: block;
   flex: 0 0 auto;
-  color: #fffaf0;
-  font-size: clamp(0.9rem, 1.45vw, 1.18rem);
+  color: #f0b247;
+  font-size: clamp(1rem, 1.55vw, 1.3rem);
   letter-spacing: 0.04em;
   font-weight: 800;
   text-decoration: none;
-  text-align: right;
+  text-align: center;
 }
 
 .app-brand-phone span,
@@ -136,6 +136,12 @@ h1, h2, h3, h4 {
 
 .app-brand-phone strong {
   color: #fffaf0;
+  font-size: 1.2em;
+}
+
+.app-brand-phone em {
+  color: #fffaf0;
+  font-style: normal;
 }
 
 .app-brand-phone strong {
@@ -168,8 +174,13 @@ h1, h2, h3, h4 {
 }
 
 .support-number {
-  color: #f0b247;
+  color: #fffaf0;
   text-decoration: none;
+}
+
+.support-number em {
+  color: #f0b247;
+  font-style: normal;
 }
 
 .support-number strong {
@@ -178,6 +189,16 @@ h1, h2, h3, h4 {
 
 .support-number strong + strong {
   margin-top: 4px;
+}
+
+.contact-card a.support-number,
+.contact-card a.support-number strong {
+  color: #fffaf0;
+}
+
+.contact-card a.support-number em {
+  color: #f0b247;
+  font-style: normal;
 }
 
 .app-brand {
@@ -189,8 +210,8 @@ h1, h2, h3, h4 {
 .app-promo-top {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 48px;
+  justify-content: space-between;
+  gap: 28px;
 }
 
 .app-brand-logo {
